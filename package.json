@@ -1,0 +1,22 @@
+{
+  "name": "ninjadb",
+  "version": "0.0.1",
+  "description": "ninjadb - nodes in nodejs database. Is file system based db engine for nodejs.",
+  "scripts": {
+    "start": "node ",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/richapma/ninjadb.git"
+  },
+  "author": "Richard J Chapman",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/richapma/ninjadb/issues"
+  },
+  "homepage": "https://github.com/richapma/ninjadb#readme",
+  "dependencies": {
+    "graceful-fs":"^4.1.6"   
+  }
+}
