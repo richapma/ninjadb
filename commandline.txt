@@ -1,1 +1,4 @@
 node ninjadb.js --root 'data' --node_list 'node.list' --node 0 --reset_count 60
+
+
+0/2/8/2/6/5/1/0/3/326_100_0

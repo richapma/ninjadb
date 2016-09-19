@@ -9,34 +9,37 @@ if the object being saved has fields prefixed with an __ it is automatically ind
 prefixes might be changed...
 maybe add stat files to different file structure nodes and update them as records are inserted so always up to date - with a rebuild feature.
 */
-var fs = require('fs');
+
+/* along with syntax to indicate table etc and qualifying conditions. */
+
+//var fs = require('fs');
 //https://github.com/isaacs/node-graceful-fs
-//var fs = require('graceful-fs');
+var fs = require('graceful-fs');
+var events = require('events');
+var express = require('express');
+var cookieParser = require('cookie-parser');
+var bodyParser = require('body-parser');
+var expressSession = require('express-session'); //used but not with the memorystore.
+var server = null;
+var ninja = null;
 
 process.stdin.resume(); //stop program closing instantly;
 
-function writefs_struct_cache_sync(path, cache) {
-    fs.writeFileSync(path, JSON.stringify(cache) , 'utf8', (err) => {
-        if (err) throw err;        
-    });
-}
+// create instance of express
+var app = express();
+var router = express.Router();
+// define middleware
+//ninjadb.use(express.static(path.join(__dirname, '../client')));
+//app.use(logger('dev'));
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false }));
 
-function exitHandler(options, err) {
-    //NO ASYNC FUNCTIONS ALLOWED HERE!.
-    //attempt to save the struct_cache.
-    console.log(err);
-    writefs_struct_cache_sync(arg_obj.root + '/' + arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(struct_cache));
-    process.exit();
-}
-
-//do something when app is closing
-process.on('exit', exitHandler.bind(null,{exit:true}));
-
-//catches ctrl+c event
-process.on('SIGINT', exitHandler.bind(null, {exit:true}));
-
-//catches uncaught exceptions
-process.on('uncaughtException', exitHandler.bind(null, {exit:true}));
+app.use(cookieParser());
+app.use(require('express-session')({
+    secret: 'Ghp$^2S07^65@1#21lpA',
+    resave: false,
+    saveUninitialized: false,
+}));
 
 //global variables.
 var arg_obj = {}; //command line arguments object
@@ -59,6 +62,7 @@ var mins = [0, 0, 0, 0, 0, 0,
              7, 7, 7, 7, 7, 7,
              8, 8, 8, 8, 8, 8,
              9, 9, 9, 9, 9];
+
 var millis = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
              1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
              2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -71,7 +75,62 @@ var millis = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
              9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
 
 var struct_cache_file = 'struct.cache';
-var table_list_file =   'table.list';
+var table_list_file   = 'table.list';
+var node_list_file    = 'node.list';
+
+//app.use(express.static(path.join(__dirname, 'public')));
+
+//routes
+router.get('/read/*', function(req, res){
+    //req.params.search = req.params.search.replace(/~/g,'.*');
+    //var rstream = fs.createReadStream('existFile');
+    //rstream.pipe(res);
+
+    var id = req.originalUrl.substring(6);
+    console.log(req.originalUrl);
+    console.log('path:' + ninja.arg_obj.root + '/' + id + '.rec');
+    //res.setHeader("content-type", "some/type");
+    var rs = fs.createReadStream(ninja.arg_obj.root + '/' + id + '.rec');
+
+
+    rs.on('error', function(e){
+        try{
+            rs.end(); //just incase rs got left open.
+        }catch(e2){
+            //we tried ;-)
+        }
+        
+        console.log(e);
+        console.log('error: failed to create read stream to use.')
+    });
+
+    console.log('read id:' + req.originalUrl.substring(10)); 
+    rs.pipe(res);
+});
+
+router.put('/write/*', function(req, res){
+    var id = req.originalUrl.substring(7);
+    console.log(req.originalUrl.substring(7)); 
+    res.send("write called.");
+});
+
+app.use('/', router);
+
+
+// error
+app.use(function(req, res, next) {
+  var err = new Error('Not Found');
+  err.status = 404;
+  next(err);
+});
+
+app.use(function(err, req, res) {
+  res.status(err.status || 500);
+  res.end(JSON.stringify({
+    message: err.message,
+    error: {}
+  }));
+});
 
 function help(mess) {
     console.log('Help:');
@@ -88,21 +147,173 @@ function help(mess) {
     */
 }
 
-function oid_to_path(id_obj) {
+function check_args(arg_o) {
+    //***r add in check the arg_obj for valid/invalid parameters.
+}
+
+//***r this probably needs rewrite.
+function writefs_struct_cache(path, cache) {
+    /*fs.writeFile(arg_obj.root + '/' + struct_cache_file, JSON.stringify(struct_cache) , 'utf8', (err) => {
+        if (err) throw err;        
+    });*/
+
+    var ws = fs.createWriteStream(arg_obj.root + '/' + arg_obj.node + '/' + struct_cache_file);
+    ws.setEncoding = 'utf8';
+    ws.write(JSON.stringify(struct_cache));
+    ws.end();
+}
+
+
+function writefs_table_list(path, tables) {
+    var ws = fs.createWriteStream(arg_obj.root + '/' + arg_obj.node + '/' + table_list_file);
+    ws.setEncoding = 'utf8';
+    ws.write(JSON.stringify(tables));
+    ws.end();
+}
+
+var ninjadb = function() { 
+    var self = this;
+    var comline_args = process.argv.slice(2);
+
+    self.init_count = 0;
+
+    //check the number of parameters are even.
+    if (comline_args.length % 2 != 0) {
+        console.log('Error: Invalid parameter count, script aborted!');
+        help();
+    }
+
+    self.arg_obj = self.get_arg_obj(comline_args);
+    console.log(self.arg_obj);
+}
+
+ninjadb.prototype = new events.EventEmitter;
+
+ninjadb.prototype.init_complete = function(){
+    var self = this;
+
+    if(self.init_count > 2)
+    {
+        //inits complete. start the server.
+        //ninjadb.get('port', process.env.PORT || 3000);
+        server = app.listen(self.node_list[self.arg_obj.node].port, function() {
+            console.log('Ninjadb listening on port ' + server.address().port);
+        });
+    }
+}
+
+ninjadb.prototype.init_node_list = function(){
+    var self = this;
+
+    console.log('init_node_list');
+    var rs = fs.createReadStream(self.arg_obj.root + '/' + node_list_file);
+    var data = [];
+
+    rs.setEncoding('utf8');
+
+    rs.on('error', function(e){
+        self.node_list = [];
+    });
+
+    rs.on('data', function(chunk) {
+        data.push(chunk);
+    });
+
+    rs.on('end', function() {
+        self.node_list = JSON.parse(data.join());
+        self.init_count++;
+        self.init_complete();
+    });
+}
+
+ninjadb.prototype.table_exist = function(table){
+    var self = this;
+
+    if(self.table_list[table]){
+        return true;
+    }else{
+        return false;
+    }
+}
+
+ninjadb.prototype.init_cache = function(){
+    var self = this;
+
+    console.log('init_cache');
+
+    var rs = fs.createReadStream(self.arg_obj.root + '/' + self.arg_obj.node + '/' + struct_cache_file);
+    var data = [];
+
+    rs.setEncoding('utf8');
+
+    rs.on('error', function(e){
+        self.struct_cache = {};
+    })
+
+    rs.on('data', function(chunk) {
+        data.push(chunk);
+    });
+
+    rs.on('end', function() {
+        self.struct_cache = JSON.parse(data.join());
+        self.init_count++;
+        self.init_complete();
+    });
+}
+
+ninjadb.prototype.init_table_list = function(){
+    var self = this;
+    console.log('init_table_list');
+    var rs = fs.createReadStream(self.arg_obj.root + '/' + table_list_file);
+    var data = [];
+
+    rs.setEncoding('utf8');
+
+    rs.on('error', function(e){
+        self.table_list = [];
+    })
+
+    rs.on('data', function(chunk) {
+        data.push(chunk);
+    });
+
+    rs.on('end', function() {
+        self.table_list = JSON.parse(data.join());
+        self.init_count++;
+        self.init_complete();
+    });
+}
+
+ninjadb.prototype.get_arg_obj = function(arr) {
+    var self = this;
+    var arg = {};
+    for (var i = 0; i < arr.length; i += 2) {
+        arg[arr[i].substring(2)] = arr[i + 1];
+    }
+    return arg;
+}
+
+ninjadb.prototype.oid_to_path = function(id_obj) {
+    var self = this;
     //{quarter:0-3=>1-4}/{month:0-2=>1-3}/{week:0-3=>1-4}/{day:0-6=>1-7}/{hh:0-9ab=>1-12}/{min:0-9=>00-50}/{seconds:0-6=>00-50/{milliseconds:0-9=>00-90/milliseconds-countid-table_node.rec}
     //the remainder of the id is dynamic and the folder structure will be built as id is generated.
     return id_obj.s1.join('/') + '/' + id_obj.s2.join('_') + '.rec';
 }
 
+ninjadb.prototype.read = function(id){
+
+}
+
 //create the file to store the data for the given id and keep a handle open to it as a write is probably be soon.
 //***r probably need to create something to clean up closing these if they are deemed open too long!
-function create_file_async(path, keepopen){
+ninjadb.prototype.create_file_async = function(path, keepopen){
+    var self = this;
     console.log(path);
     fs.open(path, 'a+', function (e, fd) {
         console.log(e);
         console.log('file desc:' + fd)
         if(!e){
-            open_files[path] = {fdesc: fd, dt: new Date()};
+            self.open_files[path] = {fdesc: fd, dt: new Date()};
         }
         if(!keepopen){
             fs.close(fd, function (e) { });
@@ -110,51 +321,51 @@ function create_file_async(path, keepopen){
     });
 }
 
-function recursive_create_dir(id_obj, depth, max, callback) {
+ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) {
+    var self = this;
     if (depth > max) {
         //we have gone through all the id entries. we are done.
-
         console.log('recusive_dir_complete:');
         return callback();
     }
     var new_depth = depth+1;
     var key=id_obj.s1.slice(0, new_depth).join();
 
-    if (struct_cache[key] > 0) {
+    if (self.struct_cache[key] > 0) {
         //folder already exists we are done.
         console.log('cache exists:');
-        recursive_create_dir(id_obj, new_depth, max, callback);
+        self.recursive_create_dir(id_obj, new_depth, max, callback);
     } else {
-        var path = arg_obj.root + '/' + id_obj.s1.slice(0, new_depth).join('/');
+        var path = self.arg_obj.root + '/' + self.id_obj.s1.slice(0, new_depth).join('/');
         console.log('calling mkdir:' + path);
         fs.mkdir(path,
             function(e) {
                 console.log('mk call back called');
                 if (!e) {
                     //hmm
-                    struct_cache[key] = 1;
+                    self.struct_cache[key] = 1;
                 } else {
                     if(e.code === 'EEXIST'){
-                        struct_cache[key] = 1;
+                        self.struct_cache[key] = 1;
                     }else{
-                        if(struct_cache[key] > 0){
+                        if(self.struct_cache[key] > 0){
                             //cache is invalidated.
-                            struct_cache[key] = 0;
+                            self.struct_cache[key] = 0;
                             //***r: maybe should invalidate the chain for all folders below this too?
                         }
                         //hmmm maybe the cache was wrong?
                         log.console('failed to create directory: ' + path);
                     }
                 }
-                recursive_create_dir(id_obj, new_depth, max, callback);
+                self.recursive_create_dir(id_obj, new_depth, max, callback);
             }
         );
-        
     }
 }
 
 //dt = new Date();
-function generate_id(dt, count_id, table_node) {
+ninjadb.prototype.generate_id = function(dt, count_id, table_node) {
+    var self = this;
     var mo = dt.getMonth(); //month in year (0-11)
     var dy = dt.getDay();    //day of week (0-6)
     var dm = dt.getDate() - 1; //day of month (1-31)
@@ -174,123 +385,62 @@ function generate_id(dt, count_id, table_node) {
     console.log(mst);
 
     var id_obj = {
-        s1: [arg_obj.node, qu, mo, wk, dy, hr, mins[min], mins[sec], millis[mst]],
+        s1: [self.arg_obj.node, qu, mo, wk, dy, hr, mins[min], mins[sec], millis[mst]],
         s2: [ms, idcount++, table_node]
     };
 
     console.log(id_obj);
-    var path = oid_to_path(id_obj);
+    var path = self.oid_to_path(id_obj);
 
-    recursive_create_dir(id_obj, 0, id_obj.s1.length, function(){
-        create_file_async(arg_obj.root + '/' + path, false);
+    self.recursive_create_dir(id_obj, 0, id_obj.s1.length, function(){
+        self.create_file_async(self.arg_obj.root + '/' + path, false);
     });
 
-    
     console.log(path);
-     //***r this needs to be changed to true;
+     
     return path;
 }
 
-function check_args(arg_o) {
-    //***r add in check the arg_obj for valid/invalid parameters.
-}
+ninjadb.prototype.init = function() {
+	var self = this;
+    self.init_count=0;
 
-function get_arg_obj(arr) {
-    var arg = {};
-    for (var i = 0; i < arr.length; i += 2) {
-        arg[arr[i].substring(2)] = arr[i + 1];
-    }
-    return arg;
-}
+    self.init_node_list();
+    self.init_table_list();
+    self.init_cache();
+};
 
-//***r this probably needs rewrite.
-function readfs_struct_cache(path) {
-    console.log('attempting to open stream');
-    var rs = fs.createReadStream(arg_obj.root + '/' + arg_obj.node + '/' + struct_cache_file);
-    var data = [];
-
-    rs.setEncoding('utf8');
-
-    rs.on('error', function(e){console.log(e)})
-
-    rs.on('data', function(chunk) {
-        data.push(chunk);
-    });
-
-    rs.on('end', function() {
-        struct_cache = JSON.parse(data.join());
-    });
-}
-
-//***r this probably needs rewrite.
-function writefs_struct_cache(path, cache) {
-    /*fs.writeFile(arg_obj.root + '/' + struct_cache_file, JSON.stringify(struct_cache) , 'utf8', (err) => {
+ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
+    var self = this;
+    fs.writeFileSync(path, JSON.stringify(cache) , 'utf8', (err) => {
         if (err) throw err;        
-    });*/
-
-    var ws = fs.createWriteStream(arg_obj.root + '/' + arg_obj.node + '/' + struct_cache_file);
-    ws.setEncoding = 'utf8';
-    ws.write(JSON.stringify(struct_cache));
-    ws.end();
+    });
 }
 
-function readfs_table_list(path) {
+ninjadb.prototype.exitHandler = function(options, err) {
+    var self = this;
+    //NO ASYNC FUNCTIONS ALLOWED HERE!.
+    //attempt to save the struct_cache.
+    console.log(err);
+    self.writefs_struct_cache_sync(self.arg_obj.root + '/' + self.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(self.struct_cache));
+    process.exit();
 }
 
-function writefs_table_list(path, tables) {
+ninjadb.prototype.test = function(){
+
 }
 
-//check if table exists.
+ninja = new ninjadb();
 
+//do something when app is closing
+process.on('exit', ninja.exitHandler.bind(null,{exit:true}));
 
-function init() {
-    //process the command line parameters with format --a valueofa --b valueofb --c valueofc
-    var comline_args = process.argv.slice(2);
+//catches ctrl+c event
+process.on('SIGINT', ninja.exitHandler.bind(null, {exit:true}));
 
-    //check the number of parameters are even.
-    if (comline_args.length % 2 != 0) {
-        console.log('Error: Invalid parameter count, script aborted!');
-        help();
-    }
-    
-    arg_obj = get_arg_obj(comline_args);
-    console.log(arg_obj);
+//catches uncaught exceptions
+process.on('uncaughtException', ninja.exitHandler.bind(null, {exit:true}));
 
-    //***r read struct_cache from file.
-    //readfs_struct_cache(struct_cache_file);
-    //console.log(struct_cache);
+ninja.init();
 
-    //***r read the list of tables from file that exist in db (this composes the last part of the id)
-    //table_list = readfs_table_list(path);
-
-    //read the lnodes file into memory.
-    //node_list = readfs_node_list(path);
-
-    //check which nodes are available locally and mark it in the in memory lnodes file.
-    //{root folder}/{position in lnodes file}/
-
-    //check static file structure is built (part of first 6 digits of internal id).
-    //conceptional mapping.
-    //{quarter:0-3=>1-4}/{month:0-2=>1-3}/{week:0-3=>1-4}/{day:0-6=>1-7}/{hh:0-9ab=>1-12}/{min:0-9=>00-50}/{miliseconds:0-6=>00000-60000}/{miliseconds:0-9=>0000-9000/miliseconds-countid.json}
-    //the remainder of the id is dynamic and the folder structure will be built as id is generated.
-
-    
-        setTimeout(function(){
-        var start_date = new Date();
-        console.log('started:' + start_date.toISOString());
-        for(var i=0; i<100; i++){
-            generate_id(new Date(), idcount, 0);
-        }
-            var end_date = new Date();
-
-            var diff = (end_date - start_date);
-            console.log('completed:' + end_date.toISOString());
-            console.log('time elapsed:' + diff + 'ms');
-        }, 5000);
-
-
-
-    writefs_struct_cache(struct_cache_file);
-}
-
-init();
+module.exports = app;
