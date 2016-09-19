@@ -81,6 +81,13 @@ var node_list_file    = 'node.list';
 //app.use(express.static(path.join(__dirname, 'public')));
 
 //routes
+router.get('/new_id/:table_node', function(req, res){
+    //test to see if 
+    var id = ninja.generate_id(new Date(), req.params.table_name);
+
+    res.send(id);
+});
+
 router.get('/read/*', function(req, res){
     //req.params.search = req.params.search.replace(/~/g,'.*');
     //var rstream = fs.createReadStream('existFile');
@@ -99,7 +106,7 @@ router.get('/read/*', function(req, res){
         }catch(e2){
             //we tried ;-)
         }
-        
+
         console.log(e);
         console.log('error: failed to create read stream to use.')
     });
@@ -110,6 +117,11 @@ router.get('/read/*', function(req, res){
 
 router.put('/write/*', function(req, res){
     var id = req.originalUrl.substring(7);
+
+    if(id == ''){
+        //no id provided - generate one.
+    }
+
     console.log(req.originalUrl.substring(7)); 
     res.send("write called.");
 });
@@ -300,27 +312,6 @@ ninjadb.prototype.oid_to_path = function(id_obj) {
     return id_obj.s1.join('/') + '/' + id_obj.s2.join('_') + '.rec';
 }
 
-ninjadb.prototype.read = function(id){
-
-}
-
-//create the file to store the data for the given id and keep a handle open to it as a write is probably be soon.
-//***r probably need to create something to clean up closing these if they are deemed open too long!
-ninjadb.prototype.create_file_async = function(path, keepopen){
-    var self = this;
-    console.log(path);
-    fs.open(path, 'a+', function (e, fd) {
-        console.log(e);
-        console.log('file desc:' + fd)
-        if(!e){
-            self.open_files[path] = {fdesc: fd, dt: new Date()};
-        }
-        if(!keepopen){
-            fs.close(fd, function (e) { });
-        }
-    });
-}
-
 ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) {
     var self = this;
     if (depth > max) {
@@ -364,7 +355,7 @@ ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) 
 }
 
 //dt = new Date();
-ninjadb.prototype.generate_id = function(dt, count_id, table_node) {
+ninjadb.prototype.generate_id = function(dt, table_node) {
     var self = this;
     var mo = dt.getMonth(); //month in year (0-11)
     var dy = dt.getDay();    //day of week (0-6)
@@ -393,7 +384,7 @@ ninjadb.prototype.generate_id = function(dt, count_id, table_node) {
     var path = self.oid_to_path(id_obj);
 
     self.recursive_create_dir(id_obj, 0, id_obj.s1.length, function(){
-        self.create_file_async(self.arg_obj.root + '/' + path, false);
+        //self.create_file_async(self.arg_obj.root + '/' + path, false);
     });
 
     console.log(path);
