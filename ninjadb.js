@@ -10,7 +10,11 @@ prefixes might be changed...
 maybe add stat files to different file structure nodes and update them as records are inserted so always up to date - with a rebuild feature.
 */
 
-/* along with syntax to indicate table etc and qualifying conditions. */
+//***TO DO:
+//track stats on node.list for use in load balancing
+//update read function to forward to the node that has the data
+//add function to request node to use from nodes.
+//add security check based on incomming ip address has to be one of the nodes.
 
 //var fs = require('fs');
 //https://github.com/isaacs/node-graceful-fs
@@ -92,6 +96,7 @@ router.get('/read/*', function(req, res){
     //req.params.search = req.params.search.replace(/~/g,'.*');
     //var rstream = fs.createReadStream('existFile');
     //rstream.pipe(res);
+    ninja.allow_access(req.ip);
 
     var id = req.originalUrl.substring(6);
     console.log(req.originalUrl);
@@ -208,7 +213,9 @@ ninjadb.prototype.init_complete = function(){
     {
         //inits complete. start the server.
         //ninjadb.get('port', process.env.PORT || 3000);
-        server = app.listen(self.node_list[self.arg_obj.node].port, function() {
+        //***TODO: find the node that belongs to us. 
+
+        server = app.listen(self.node_list[self.arg_obj.node].port, '::', function() {
             console.log('Ninjadb listening on port ' + server.address().port);
         });
     }
@@ -340,7 +347,7 @@ ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) 
                         self.struct_cache[key] = 1;
                     }else{
                         if(self.struct_cache[key] > 0){
-                            //cache is invalidated.
+                            //tcache is invalidated.
                             self.struct_cache[key] = 0;
                             //***r: maybe should invalidate the chain for all folders below this too?
                         }
@@ -351,6 +358,17 @@ ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) 
                 self.recursive_create_dir(id_obj, new_depth, max, callback);
             }
         );
+    }
+}
+
+ninjadb.prototype.allow_access = function(ip){
+    //check incoming request is from an address in the node.list
+    var self = this;
+
+    if(self.node_list[ip]){
+        return true;
+    }else{
+        return false;
     }
 }
 

@@ -1,1 +1,4 @@
-[{"dns":"localhost","ip4":"127.0.0.1","ip6":"","port":2000,"syncnodes":[0,1],"synctype":0}]
+{
+    "127.0.0.1": {"type":"node","syncnodes":["node1","node2"],"synctype":0,"port":2000},"dbsize":0,"dbsize_weight":0.5,"reqs_rate":0,"reqs_rate_weight":0.5,"master_node":true},    
+    "web1": {"type":"website","syncnodes":["null"],"synctype":0,"ip4":"127.0.0.1","ip6":"::1","port":"null","syncnodes":["null"],"synctype":"null"},"dbsize":0,"reqs_rate":0,"dbsize_weight":0,"reqs_rate_weight":0,"master_node":false}
+}
