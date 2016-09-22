@@ -19,21 +19,59 @@ maybe add stat files to different file structure nodes and update them as record
 
 //var fs = require('fs');
 //https://github.com/isaacs/node-graceful-fs
+
+/*
+TODO: Work adding messaging code so main thread can broadcast to sub threads so each worker can be updated with the current statistics of what secrets and node connections have been handed out.
+so load balencing can use the correct info.
+
+
+From Master to worker:
+worker.send({json data});    // In Master part
+
+process.on('message', yourCallbackFunc(jsonData));    // In Worker part
+
+From Worker to Master:
+process.send({json data});   // In Worker part
+
+worker.on('message', yourCallbackFunc(jsonData));    // In Master part
+
+*/
+
 var cluster = require('cluster')
 
 process.stdin.resume(); //stop program closing instantly;
 
+var master_load_bal_stats = {};
+
+process.on('message', function(mess){
+    //received a message from one of the workers.
+    //broadcast message to all workers.
+    for(var i=0; i<worker.length; i++){
+        worker[i].send(mess);
+    }
+});
+
 if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
-
+    var worker = [];
     // make worker processese one for each core.
     for (var i = 0; i < cores; i += 1) {
-        cluster.fork();
+        worker[i] = cluster.fork();
+        worker[i].on('message', function(mess){
+            //this should be in the worker space.
+            load_bal_stats = mess;
+        });
     }
 }else{
     var fs = require('graceful-fs');
     var events = require('events');
+    var https = require('https');
+    var server_options = {
+        key:    fs.readFileSync('server.key'),
+        cert:   fs.readFileSync('server.crt')
+    };
+    
     var express = require('express');
     var cookieParser = require('cookie-parser');
     var bodyParser = require('body-parser');
@@ -53,7 +91,7 @@ if (cluster.isMaster) {
     app.use(require('express-session')({
         secret: 'Ghp$^2S07^65@1#21lpA',
         resave: false,
-        saveUninitialized: false,
+        saveUninitialized: false
     }));
 
     //global variables.
@@ -93,26 +131,57 @@ if (cluster.isMaster) {
     var table_list_file   = 'table.list';
     var node_list_file    = 'node.list';
     var access_list_file  = 'access.list';
+    var load_bal_stats = {};
+    var node_list_length = 0;
 
     //app.use(express.static(path.join(__dirname, 'public')));
+    router.put('/pass/:secret)', function(req, res){
+        //store the secret in cache for checking permissions.
+        //***TODO:maybe implement. - depends if i decide on if the webserver side can be trusted to honor calling the request_connection first...
+    });
 
-    //routes
-    router.get('/new_id/:table_node', function(req, res){
-        //test to see if 
-        if(ninja.allow_access(req.ip)){
-            var id = ninja.generate_id(new Date(), req.params.table_name);
+    router.get('/pass/:secret)', function(req, res){
+        //receive secret.
+        //***TODO:maybe implement. - depends if i decide on if the webserver side can be trusted to honor calling the request_connection first...
+    });
 
-            res.send(id);
+    //check i am the master database node and if i am return the node i want the consumer to use.
+    router.get('/request_connection/:suggest_id)', function(req, res){
+        if(ninja.allow_access(req.ip) && ninja.node_list[ninja.arg_obj.node].type == 'master'){
+            //i am the master check 
+            res.status(200);
+            //use load balencing to get the next node connection to use.
+            var i = ninja.get_next_node(req.params.suggest_id);
+            var options = {};
+            
+            var secret = ninja.generate_id(new Date(), ninja.arg_obj.node, req.params.table_node);
+            //***TODO: need to pass secret to database that will be accessed.
+            
+            if(ninja.node_list[i].ip6 != '')
+            {
+                options.host = ninja.node_list[i].ip6;
+                options.port = ninja.node_list[i].port;
+            }else{
+                options.host = ninja.node_list[i].ip4;
+                options.port = ninja.node_list[i].port;            
+            }
+            
+            options.header = {accept: '*/*',
+                              'Cache-Control': 'no-cache',
+                              'data-secret': secret};
+            //return the connection info to use.
+            res.send(options);
         }else{
+            //only the master is allowed to issue connections.
             res.status(403);
         }
     });
 
+    //routes
     router.get('/new_id/:table_node', function(req, res){
-        //test to see if 
         if(ninja.allow_access(req.ip)){
-            var id = ninja.generate_id(new Date(), req.params.table_name);
-
+            var id = ninja.generate_id(new Date(), self.arg_obj.node, req.params.table_node);
+            res.status(200);
             res.send(id);
         }else{
             res.status(403);
@@ -217,7 +286,6 @@ if (cluster.isMaster) {
         ws.end();
     }
 
-
     function writefs_table_list(path, tables) {
         var ws = fs.createWriteStream(arg_obj.root + '/' + arg_obj.node + '/' + table_list_file);
         ws.setEncoding = 'utf8';
@@ -252,9 +320,12 @@ if (cluster.isMaster) {
             //ninjadb.get('port', process.env.PORT || 3000);
             //***TODO: find the node that belongs to us. 
 
-            server = app.listen(self.node_list[self.arg_obj.node].port, '::', function() {
+            server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].port, '::', function(){
+                    console.log('Ninjadb listening on port ' + server.address().port);
+                });
+            /*server = app.listen(self.node_list[self.arg_obj.node].port, '::', function() {
                 console.log('Ninjadb listening on port ' + server.address().port);
-            });
+            });*/
         }
     }
 
@@ -277,6 +348,7 @@ if (cluster.isMaster) {
 
         rs.on('end', function() {
             self.node_list = JSON.parse(data.join());
+            node_list_length = self.node_list.length;
             self.init_count++;
             self.init_complete();
             self.init_access_list();
@@ -291,9 +363,9 @@ if (cluster.isMaster) {
         self.access_list = {};
         
         console.log(self.node_list);
-        for (var i=0; i<self.node_list.length; i++){
+        for (var i=0; i<node_list_length; i++){
             self.access_list[self.node_list[i].ip4] = 1;
-            self.access_list[self.node_list[i].ip6] = 1;        
+            self.access_list[self.node_list[i].ip6] = 1;                    
         }
         
         console.log(self.access_list);
@@ -412,7 +484,7 @@ if (cluster.isMaster) {
         //check incoming request is from an address in the node.list
         var self = this;
         console.log(self.access_list);
-        if(self.access_list[ip]){
+        if(self.access_list[ip] > 0){
             return true;
         }else{
             return false;
@@ -420,7 +492,7 @@ if (cluster.isMaster) {
     }
 
     //dt = new Date();
-    ninjadb.prototype.generate_id = function(dt, table_node) {
+    ninjadb.prototype.generate_id = function(dt, node, table_node) {
         var self = this;
         var mo = dt.getMonth(); //month in year (0-11)
         var dy = dt.getDay();    //day of week (0-6)
@@ -441,7 +513,7 @@ if (cluster.isMaster) {
         console.log(mst);
 
         var id_obj = {
-            s1: [self.arg_obj.node, qu, mo, wk, dy, hr, mins[min], mins[sec], millis[mst]],
+            s1: [node, qu, mo, wk, dy, hr, mins[min], mins[sec], millis[mst]],
             s2: [ms, idcount++, table_node]
         };
 
@@ -466,6 +538,25 @@ if (cluster.isMaster) {
         self.init_cache();
     };
 
+    ninjadb.prototype.get_next_node = function(suggest_id){
+        if(suggest_id != ''){
+            //***TODO: check the suggestion is even valid.
+            //update load_bal_stats.
+            //this should be a suggestion - not a demand... balancing algorithm should have opertunity to decide over it.
+            load_bal_stats.chosen_node = suggest_id;
+        }else{
+            //use load balancing algorithm to choose database store to use.
+            
+            //currently load balance is just round robin.
+            do{
+                load_bal_stats.chosen_node = (load_bal_stats.chosen_node + 1) % node_list_length;
+            }while(node_list[load_bal_stats.chosen_node].type != 'node')
+
+        }
+        process.send(load_bal_stats); //inform parent process to broadcast to all forks
+        return load_bal_stats.chosen_node;
+    }
+    
     ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
         var self = this;
         fs.writeFileSync(path, JSON.stringify(cache) , 'utf8', (err) => {
