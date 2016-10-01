@@ -1,4 +1,9 @@
+//run master node/controller
 node ninjadb.js --root 'data' --node_list 'node.list' --node 0 --reset_count 60
 
+//run the first real node for storing data.
+node ninjadb.js --root 'data' --node_list 'node.list' --node 1 --reset_count 60
+
+//the website one in the node.list is just for permission to allow the webserver to connect to the root node.
 
 0/2/8/2/6/5/1/0/3/326_100_0

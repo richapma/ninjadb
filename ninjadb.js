@@ -68,8 +68,8 @@ if (cluster.isMaster) {
     var events = require('events');
     var https = require('https');
     var server_options = {
-        key:    fs.readFileSync('server.key'),
-        cert:   fs.readFileSync('server.crt')
+        key:    fs.readFileSync('key.pem'),
+        cert:   fs.readFileSync('cert.pem')
     };
     
     var express = require('express');
@@ -135,18 +135,19 @@ if (cluster.isMaster) {
     var node_list_length = 0;
 
     //app.use(express.static(path.join(__dirname, 'public')));
-    router.put('/pass/:secret)', function(req, res){
+    router.put('/pass/:secret', function(req, res){
         //store the secret in cache for checking permissions.
         //***TODO:maybe implement. - depends if i decide on if the webserver side can be trusted to honor calling the request_connection first...
     });
 
-    router.get('/pass/:secret)', function(req, res){
+    router.get('/pass/:secret', function(req, res){
         //receive secret.
         //***TODO:maybe implement. - depends if i decide on if the webserver side can be trusted to honor calling the request_connection first...
     });
 
+    console.log('request connection');
     //check i am the master database node and if i am return the node i want the consumer to use.
-    router.get('/request_connection/:suggest_id)', function(req, res){
+    router.get('/request_connection/:suggest_id', function(req, res){
         if(ninja.allow_access(req.ip) && ninja.node_list[ninja.arg_obj.node].type == 'master'){
             //i am the master check 
             res.status(200);
@@ -177,6 +178,7 @@ if (cluster.isMaster) {
         }
     });
 
+    console.log('new id');
     //routes
     router.get('/new_id/:table_node', function(req, res){
         if(ninja.allow_access(req.ip)){
@@ -188,6 +190,7 @@ if (cluster.isMaster) {
         }
     });
 
+    console.log('read');
     //needs to be updated to go to the correct location.
     router.get('/read/*', function(req, res){
         //req.params.search = req.params.search.replace(/~/g,'.*');
@@ -221,6 +224,7 @@ if (cluster.isMaster) {
         }
     });
 
+    console.log('write');
     router.put('/write/*', function(req, res){
         if(ninja.allow_access(req.ip)){
             var id = req.originalUrl.substring(7);
@@ -238,6 +242,7 @@ if (cluster.isMaster) {
         }
     });
 
+    console.log('app use');
     app.use('/', router);
 
     // error
@@ -313,13 +318,14 @@ if (cluster.isMaster) {
 
     ninjadb.prototype.init_complete = function(){
         var self = this;
-
+        console.log('init complete');
+        console.log('init count:' + self.init_count);
         if(self.init_count > 3)
         {
             //inits complete. start the server.
             //ninjadb.get('port', process.env.PORT || 3000);
             //***TODO: find the node that belongs to us. 
-
+            console.log('starting server...');
             server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].port, '::', function(){
                     console.log('Ninjadb listening on port ' + server.address().port);
                 });
@@ -385,7 +391,10 @@ if (cluster.isMaster) {
         rs.setEncoding('utf8');
 
         rs.on('error', function(e){
+            console.log('error could not read cache');
             self.struct_cache = {};
+            self.init_count++; //ignore failure.
+            self.init_complete();
         })
 
         rs.on('data', function(chunk) {
@@ -521,6 +530,7 @@ if (cluster.isMaster) {
         var path = self.oid_to_path(id_obj);
 
         self.recursive_create_dir(id_obj, 0, id_obj.s1.length, function(){
+            //create file for testing.
             //self.create_file_async(self.arg_obj.root + '/' + path, false);
         });
 
@@ -550,6 +560,7 @@ if (cluster.isMaster) {
             //currently load balance is just round robin.
             do{
                 load_bal_stats.chosen_node = (load_bal_stats.chosen_node + 1) % node_list_length;
+                console.log('get next node');
             }while(node_list[load_bal_stats.chosen_node].type != 'node')
 
         }
@@ -565,10 +576,11 @@ if (cluster.isMaster) {
     }
 
     ninjadb.prototype.exitHandler = function(options, err) {
-        var self = this;
+        var self = options;
         //NO ASYNC FUNCTIONS ALLOWED HERE!.
         //attempt to save the struct_cache.
         console.log(err);
+        console.log(self);
         self.writefs_struct_cache_sync(self.arg_obj.root + '/' + self.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(self.struct_cache));
         process.exit();
     }
