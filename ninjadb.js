@@ -147,15 +147,17 @@ if (cluster.isMaster) {
 
     console.log('request connection');
     //check i am the master database node and if i am return the node i want the consumer to use.
-    router.get('/request_connection/:suggest_id', function(req, res){
+    router.get('/request_connection/*', function(req, res){
         if(ninja.allow_access(req.ip) && ninja.node_list[ninja.arg_obj.node].type == 'master'){
+            var suggest_id = req.originalUrl.substring(20);
+            console.log(suggest_id);
             //i am the master check 
             res.status(200);
             //use load balencing to get the next node connection to use.
-            var i = ninja.get_next_node(req.params.suggest_id);
+            var i = ninja.get_next_node(suggest_id);
             var options = {};
             
-            var secret = ninja.generate_id(new Date(), ninja.arg_obj.node, req.params.table_node);
+            var secret = ninja.generate_id(new Date(), ninja.arg_obj.node, 0);
             //***TODO: need to pass secret to database that will be accessed.
             
             if(ninja.node_list[i].ip6 != '')
@@ -444,6 +446,7 @@ if (cluster.isMaster) {
         var self = this;
         //{quarter:0-3=>1-4}/{month:0-2=>1-3}/{week:0-3=>1-4}/{day:0-6=>1-7}/{hh:0-9ab=>1-12}/{min:0-9=>00-50}/{seconds:0-6=>00-50/{milliseconds:0-9=>00-90/milliseconds-countid-table_node.rec}
         //the remainder of the id is dynamic and the folder structure will be built as id is generated.
+        console.log(id_obj);
         return id_obj.s1.join('/') + '/' + id_obj.s2.join('_') + '.rec';
     }
 
