@@ -41,13 +41,15 @@ var cluster = require('cluster')
 
 process.stdin.resume(); //stop program closing instantly;
 
-var master_load_bal_stats = {};
+var master_load_bal_stats = {
+    chosen_node : 0
+};
 
 process.on('message', function(mess){
     //received a message from one of the workers.
     //broadcast message to all workers.
-    for(var i=0; i<worker.length; i++){
-        worker[i].send(mess);
+    for(var thisworker in worker){
+        thisworker.send(mess);
     }
 });
 
@@ -55,12 +57,19 @@ if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
     var worker = [];
-    // make worker processese one for each core.
+    process.env.load_bal_stats = JSON.stringify(master_load_bal_stats);
+
+    // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
-        worker[i] = cluster.fork();
-        worker[i].on('message', function(mess){
-            //this should be in the worker space.
-            load_bal_stats = mess;
+        var fk = cluster.fork({load_bal_stats: JSON.stringify(master_load_bal_stats)});
+        
+        console.log(process.env);
+        worker[fk.id] = fk;
+
+        worker[fk.id].on('message', function(mess){
+            var self = this;
+            process.env.load_bal_stats = mess;
+            console.log(process.env);
         });
     }
 }else{
@@ -131,8 +140,7 @@ if (cluster.isMaster) {
     var table_list_file   = 'table.list';
     var node_list_file    = 'node.list';
     var access_list_file  = 'access.list';
-    var load_bal_stats = {};
-    var node_list_length = 0;
+    //var load_bal_stats = {};
 
     //app.use(express.static(path.join(__dirname, 'public')));
     router.put('/pass/:secret', function(req, res){
@@ -340,7 +348,6 @@ if (cluster.isMaster) {
     ninjadb.prototype.init_node_list = function(){
         var self = this;
 
-        console.log('init_node_list');
         var rs = fs.createReadStream(self.arg_obj.root + '/' + node_list_file);
         var data = [];
 
@@ -356,7 +363,8 @@ if (cluster.isMaster) {
 
         rs.on('end', function() {
             self.node_list = JSON.parse(data.join());
-            node_list_length = self.node_list.length;
+            console.log('init_node_list:' +  self.node_list.length);
+            self.node_list_length = self.node_list.length;
             self.init_count++;
             self.init_complete();
             self.init_access_list();
@@ -371,7 +379,7 @@ if (cluster.isMaster) {
         self.access_list = {};
         
         console.log(self.node_list);
-        for (var i=0; i<node_list_length; i++){
+        for (var i=0; i<self.node_list_length; i++){
             self.access_list[self.node_list[i].ip4] = 1;
             self.access_list[self.node_list[i].ip6] = 1;                    
         }
@@ -452,6 +460,7 @@ if (cluster.isMaster) {
 
     ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) {
         var self = this;
+        console.log('recursive_create_dir:'+id_obj);
         if (depth > max) {
             //we have gone through all the id entries. we are done.
             console.log('recusive_dir_complete:');
@@ -465,7 +474,7 @@ if (cluster.isMaster) {
             console.log('cache exists:');
             self.recursive_create_dir(id_obj, new_depth, max, callback);
         } else {
-            var path = self.arg_obj.root + '/' + self.id_obj.s1.slice(0, new_depth).join('/');
+            var path = self.arg_obj.root + '/' + id_obj.s1.slice(0, new_depth).join('/');
             console.log('calling mkdir:' + path);
             fs.mkdir(path,
                 function(e) {
@@ -529,9 +538,9 @@ if (cluster.isMaster) {
             s2: [ms, idcount++, table_node]
         };
 
-        console.log(id_obj);
+        
         var path = self.oid_to_path(id_obj);
-
+        console.log(id_obj);
         self.recursive_create_dir(id_obj, 0, id_obj.s1.length, function(){
             //create file for testing.
             //self.create_file_async(self.arg_obj.root + '/' + path, false);
@@ -549,26 +558,33 @@ if (cluster.isMaster) {
         self.init_node_list();
         self.init_table_list();
         self.init_cache();
+
     };
 
     ninjadb.prototype.get_next_node = function(suggest_id){
+        var self=this;
+        var js_env_lbs = JSON.parse(process.env.load_bal_stats);
+
         if(suggest_id != ''){
             //***TODO: check the suggestion is even valid.
             //update load_bal_stats.
             //this should be a suggestion - not a demand... balancing algorithm should have opertunity to decide over it.
-            load_bal_stats.chosen_node = suggest_id;
+            js_env_lbs.chosen_node = suggest_id;
+            process.env.load_bal_stats = JSON.stringify(js_env_lbs);
         }else{
             //use load balancing algorithm to choose database store to use.
-            
+            console.log('get next node, node_list_length:' + self.node_list_length);
+            console.log('the node list' + self.node_list);
             //currently load balance is just round robin.
             do{
-                load_bal_stats.chosen_node = (load_bal_stats.chosen_node + 1) % node_list_length;
-                console.log('get next node');
-            }while(node_list[load_bal_stats.chosen_node].type != 'node')
-
+                console.log('current node:' + js_env_lbs.chosen_node);
+                js_env_lbs.chosen_node = (js_env_lbs.chosen_node + 1) % (self.node_list_length);
+                console.log('get next node:' + js_env_lbs.chosen_node);
+            }while(self.node_list[js_env_lbs.chosen_node].type != 'node')
+            process.env.load_bal_stats = JSON.stringify(js_env_lbs);
         }
-        process.send(load_bal_stats); //inform parent process to broadcast to all forks
-        return load_bal_stats.chosen_node;
+        process.send(process.env.load_bal_stats); //inform parent process to broadcast to all forks
+        return js_env_lbs.chosen_node;
     }
     
     ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
@@ -606,6 +622,7 @@ if (cluster.isMaster) {
 
     ninja.init();
 
+    console.log(process.env);
 }
 
 cluster.on('exit', function (worker) {
