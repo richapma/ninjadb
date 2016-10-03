@@ -24,8 +24,9 @@ maybe add stat files to different file structure nodes and update them as record
 TODO: Work adding messaging code so main thread can broadcast to sub threads so each worker can be updated with the current statistics of what secrets and node connections have been handed out.
 so load balencing can use the correct info.
 
-
 From Master to worker:
+//messaging structure.
+//{ key: { mess: JSON.stringify(message)}}
 worker.send({json data});    // In Master part
 
 process.on('message', yourCallbackFunc(jsonData));    // In Worker part
@@ -36,39 +37,53 @@ process.send({json data});   // In Worker part
 worker.on('message', yourCallbackFunc(jsonData));    // In Master part
 
 */
+//***TODO: make the cache_struct be passed in process.env.message_jsonstr - or alternative method - writing to the cache file/reading from cache file?
+//maybe set up timer to write cache_struct to disk and read from disk?
 
 var cluster = require('cluster')
 
 process.stdin.resume(); //stop program closing instantly;
 
-var master_load_bal_stats = {
-    chosen_node : 0
-};
+var merge_jsonstr = function(s1, s2){
+    //make copy of objects pushed in.
+    var o1 = JSON.parse(s1);
+    var o2 = JSON.parse(s2);
+    var o3;
+
+    for (var attrname in o1) { o3[attrname] = o1[attrname]; }
+    for (var attrname in o2) { o3[attrname] = o2[attrname]; }
+
+    return JSON.stringify(o3);
+}
 
 process.on('message', function(mess){
     //received a message from one of the workers.
     //broadcast message to all workers.
+
+    //received a message merge the object.
+    process.env.message_jsonstr = merge_jsonstr(process.env.message_jsonstr, mess);
+
     for(var thisworker in worker){
-        thisworker.send(mess);
+        thisworker.send(process.env.message_jsonstr);
     }
 });
 
 if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
-    var worker = [];
-    process.env.load_bal_stats = JSON.stringify(master_load_bal_stats);
+    var worker;
+    process.env.message_jsonstr = message_jsonstr;
 
     // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
-        var fk = cluster.fork({load_bal_stats: JSON.stringify(master_load_bal_stats)});
+        var fk = cluster.fork({message_jsonstr: process.env.message_jsonstr});
         
         console.log(process.env);
         worker[fk.id] = fk;
 
         worker[fk.id].on('message', function(mess){
             var self = this;
-            process.env.load_bal_stats = mess;
+            process.env.message_jsonstr = mess;
             console.log(process.env);
         });
     }
@@ -105,7 +120,7 @@ if (cluster.isMaster) {
 
     //global variables.
     var arg_obj = {}; //command line arguments object
-    var struct_cache = {};
+    //var struct_cache = {};
     var open_files = {};
     var table_list = [];
     var node_list = [];
@@ -241,6 +256,8 @@ if (cluster.isMaster) {
 
             if(id == ''){
                 //no id provided - generate one.
+            }else{
+                //id + '.rec'
             }
 
             console.log(req.originalUrl.substring(7)); 
@@ -455,7 +472,7 @@ if (cluster.isMaster) {
         //{quarter:0-3=>1-4}/{month:0-2=>1-3}/{week:0-3=>1-4}/{day:0-6=>1-7}/{hh:0-9ab=>1-12}/{min:0-9=>00-50}/{seconds:0-6=>00-50/{milliseconds:0-9=>00-90/milliseconds-countid-table_node.rec}
         //the remainder of the id is dynamic and the folder structure will be built as id is generated.
         console.log(id_obj);
-        return id_obj.s1.join('/') + '/' + id_obj.s2.join('_') + '.rec';
+        return id_obj.s1.join('/') + '/' + id_obj.s2.join('_');
     }
 
     ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) {
@@ -563,14 +580,13 @@ if (cluster.isMaster) {
 
     ninjadb.prototype.get_next_node = function(suggest_id){
         var self=this;
-        var js_env_lbs = JSON.parse(process.env.load_bal_stats);
+        var message_json = JSON.parse(process.env.message_jsonstr);
 
         if(suggest_id != ''){
             //***TODO: check the suggestion is even valid.
             //update load_bal_stats.
             //this should be a suggestion - not a demand... balancing algorithm should have opertunity to decide over it.
-            js_env_lbs.chosen_node = suggest_id;
-            process.env.load_bal_stats = JSON.stringify(js_env_lbs);
+            message_json.load_bal_stats.chosen_node = suggest_id;
         }else{
             //use load balancing algorithm to choose database store to use.
             console.log('get next node, node_list_length:' + self.node_list_length);
@@ -578,29 +594,27 @@ if (cluster.isMaster) {
             //currently load balance is just round robin.
             do{
                 console.log('current node:' + js_env_lbs.chosen_node);
-                js_env_lbs.chosen_node = (js_env_lbs.chosen_node + 1) % (self.node_list_length);
+                message_json.load_bal_stats.chosen_node = (message_json.load_bal_stats.chosen_node + 1) % (self.node_list_length);
                 console.log('get next node:' + js_env_lbs.chosen_node);
-            }while(self.node_list[js_env_lbs.chosen_node].type != 'node')
-            process.env.load_bal_stats = JSON.stringify(js_env_lbs);
+            }while(self.node_list[message_json.load_bal_stats.chosen_node].type != 'node')
+            process.env.message_jsonstr = JSON.stringify(message_json);
         }
-        process.send(process.env.load_bal_stats); //inform parent process to broadcast to all forks
-        return js_env_lbs.chosen_node;
+        process.send(process.env.message_jsonstr); //inform parent process to broadcast to all forks
+        return message_json.load_bal_stats.chosen_node;
     }
     
     ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
-        var self = this;
         fs.writeFileSync(path, JSON.stringify(cache) , 'utf8', (err) => {
             if (err) throw err;        
         });
     }
 
     ninjadb.prototype.exitHandler = function(options, err) {
-        var self = options;
         //NO ASYNC FUNCTIONS ALLOWED HERE!.
         //attempt to save the struct_cache.
-        console.log(err);
-        console.log(self);
-        self.writefs_struct_cache_sync(self.arg_obj.root + '/' + self.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(self.struct_cache));
+        var self=this;
+        console.log('exit handler:' + self);
+        writefs_struct_cache_sync(nj.arg_obj.root + '/' + nj.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(nj.struct_cache));
         process.exit();
     }
 
