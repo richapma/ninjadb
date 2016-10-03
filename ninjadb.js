@@ -37,8 +37,7 @@ process.send({json data});   // In Worker part
 worker.on('message', yourCallbackFunc(jsonData));    // In Master part
 
 */
-//***TODO: make the cache_struct be passed in process.env.message_jsonstr - or alternative method - writing to the cache file/reading from cache file?
-//maybe set up timer to write cache_struct to disk and read from disk?
+//***TODO: updated messaging to maintain cache_struct and load_bal_stats...  TEST!!!!
 
 var cluster = require('cluster')
 
@@ -56,15 +55,31 @@ var merge_jsonstr = function(s1, s2){
     return JSON.stringify(o3);
 }
 
+function process_mess(mess){
+    var obj = JSON.parse(mess);
+
+    if(obj.type > 2){
+        //obj.type == 3
+    }else if(obj.type > 1){
+        //obj.type == 2    
+        //cache_struct 
+        process.env.struct_cache[obj.mess] = 1;   
+    }else if(obj.type > 0){
+        //obj.type == 1
+        //load_bal_stats
+        process.env.load_bal_stats = obj.mess;
+    }
+}
+
 process.on('message', function(mess){
     //received a message from one of the workers.
     //broadcast message to all workers.
 
     //received a message merge the object.
-    process.env.message_jsonstr = merge_jsonstr(process.env.message_jsonstr, mess);
+    process_mess(mess);
 
     for(var thisworker in worker){
-        thisworker.send(process.env.message_jsonstr);
+        thisworker.send(mess);
     }
 });
 
@@ -72,18 +87,17 @@ if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
     var worker;
-    process.env.message_jsonstr = message_jsonstr;
 
     // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
-        var fk = cluster.fork({message_jsonstr: process.env.message_jsonstr});
+        var fk = cluster.fork();
         
         console.log(process.env);
         worker[fk.id] = fk;
 
         worker[fk.id].on('message', function(mess){
             var self = this;
-            process.env.message_jsonstr = mess;
+            process_mess(mess);
             console.log(process.env);
         });
     }
@@ -314,7 +328,7 @@ if (cluster.isMaster) {
 
         var ws = fs.createWriteStream(arg_obj.root + '/' + arg_obj.node + '/' + struct_cache_file);
         ws.setEncoding = 'utf8';
-        ws.write(JSON.stringify(struct_cache));
+        ws.write(JSON.stringify(process.env.struct_cache));
         ws.end();
     }
 
@@ -419,7 +433,7 @@ if (cluster.isMaster) {
 
         rs.on('error', function(e){
             console.log('error could not read cache');
-            self.struct_cache = {};
+            process.env.struct_cache = {};
             self.init_count++; //ignore failure.
             self.init_complete();
         })
@@ -429,7 +443,7 @@ if (cluster.isMaster) {
         });
 
         rs.on('end', function() {
-            self.struct_cache = JSON.parse(data.join());
+            process.env.struct_cache = JSON.parse(data.join());
             self.init_count++;
             self.init_complete();
         });
@@ -486,7 +500,7 @@ if (cluster.isMaster) {
         var new_depth = depth+1;
         var key=id_obj.s1.slice(0, new_depth).join();
 
-        if (self.struct_cache[key] > 0) {
+        if (process.env.struct_cache[key] > 0) {
             //folder already exists we are done.
             console.log('cache exists:');
             self.recursive_create_dir(id_obj, new_depth, max, callback);
@@ -497,19 +511,13 @@ if (cluster.isMaster) {
                 function(e) {
                     console.log('mk call back called');
                     if (!e) {
-                        //hmm
-                        self.struct_cache[key] = 1;
+                        //created file
+                        process.env.struct_cache[key] = 1;
+                        process.send(JSON.stringify({type:2, mess:key}));
                     } else {
                         if(e.code === 'EEXIST'){
-                            self.struct_cache[key] = 1;
-                        }else{
-                            if(self.struct_cache[key] > 0){
-                                //tcache is invalidated.
-                                self.struct_cache[key] = 0;
-                                //***r: maybe should invalidate the chain for all folders below this too?
-                            }
-                            //hmmm maybe the cache was wrong?
-                            log.console('failed to create directory: ' + path);
+                            process.env.struct_cache[key] = 1;
+                            process.send(JSON.stringify({type:2, mess:key}));
                         }
                     }
                     self.recursive_create_dir(id_obj, new_depth, max, callback);
@@ -586,7 +594,7 @@ if (cluster.isMaster) {
             //***TODO: check the suggestion is even valid.
             //update load_bal_stats.
             //this should be a suggestion - not a demand... balancing algorithm should have opertunity to decide over it.
-            message_json.load_bal_stats.chosen_node = suggest_id;
+            process.env.load_bal_stats.chosen_node = suggest_id;
         }else{
             //use load balancing algorithm to choose database store to use.
             console.log('get next node, node_list_length:' + self.node_list_length);
@@ -594,13 +602,13 @@ if (cluster.isMaster) {
             //currently load balance is just round robin.
             do{
                 console.log('current node:' + js_env_lbs.chosen_node);
-                message_json.load_bal_stats.chosen_node = (message_json.load_bal_stats.chosen_node + 1) % (self.node_list_length);
+                process.env.load_bal_stats.chosen_node = (process.env.load_bal_stats.chosen_node + 1) % (self.node_list_length);
                 console.log('get next node:' + js_env_lbs.chosen_node);
-            }while(self.node_list[message_json.load_bal_stats.chosen_node].type != 'node')
-            process.env.message_jsonstr = JSON.stringify(message_json);
+            }while(self.node_list[process.env.load_bal_stats.chosen_node].type != 'node')
+            //process.env.message_jsonstr = JSON.stringify(message_json);
         }
-        process.send(process.env.message_jsonstr); //inform parent process to broadcast to all forks
-        return message_json.load_bal_stats.chosen_node;
+        process.send(JSON.stringify({type:1, mess: process.env.load_bal_stats})); //inform parent process to broadcast to all forks
+        return process.env.load_bal_stats.chosen_node;
     }
     
     ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
