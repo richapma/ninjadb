@@ -43,6 +43,8 @@ var cluster = require('cluster')
 
 process.stdin.resume(); //stop program closing instantly;
 
+var glob = {};
+
 var merge_jsonstr = function(s1, s2){
     //make copy of objects pushed in.
     var o1 = JSON.parse(s1);
@@ -55,19 +57,31 @@ var merge_jsonstr = function(s1, s2){
     return JSON.stringify(o3);
 }
 
-function process_mess(mess){
-    var obj = JSON.parse(mess);
+function process_mess(){
+    var messages = process.env.mess.split('}|{');
+    //clear the queue.
+    process.env.message_queue = '';
 
-    if(obj.type > 2){
-        //obj.type == 3
-    }else if(obj.type > 1){
-        //obj.type == 2    
-        //cache_struct 
-        process.env.struct_cache[obj.mess] = 1;   
-    }else if(obj.type > 0){
-        //obj.type == 1
-        //load_bal_stats
-        process.env.load_bal_stats = obj.mess;
+    for(var i=0, j=messages.length; i<j;i++)
+    {
+        var obj = JSON.parse(messages[i]);
+        console.log(obj.mess);
+        console.log('process_mess:'+ glob.struct_cache);
+        console.log('process_mess:'+ glob.load_bal_stats);
+        if(message.src != process.env.src){
+            if(obj.type > 2){
+                //obj.type == 3
+            }else if(obj.type > 1){
+                //obj.type == 2    
+                //struct_cache 
+                glob.struct_cache[obj.mess] = 1;   
+            }else if(obj.type > 0){
+                //obj.type == 1
+                //load_bal_stats
+                glob.load_bal_stats = obj.mess;
+                console.log(glob);
+            }
+        }
     }
 }
 
@@ -76,7 +90,7 @@ process.on('message', function(mess){
     //broadcast message to all workers.
 
     //received a message merge the object.
-    process_mess(mess);
+    //process_mess(mess);
 
     for(var thisworker in worker){
         thisworker.send(mess);
@@ -86,20 +100,26 @@ process.on('message', function(mess){
 if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
-    var worker;
+    var worker = {};
 
     // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
         var fk = cluster.fork();
         
-        console.log(process.env);
+        console.log('new fork:' + fk);
         worker[fk.id] = fk;
 
         worker[fk.id].on('message', function(mess){
             var self = this;
-            process_mess(mess);
-            console.log(process.env);
-        });
+
+            if(process.env.message_queue != '')
+            {
+                //add a message seperator }|{ to be used for splitting on later.
+                process.env.message_queue += '}|{' + mess;
+            }else{
+                process.env.message_queue += mess;
+            }
+        });        
     }
 }else{
     var fs = require('graceful-fs');
@@ -169,6 +189,9 @@ if (cluster.isMaster) {
     var table_list_file   = 'table.list';
     var node_list_file    = 'node.list';
     var access_list_file  = 'access.list';
+
+    var timer_proc_mess = null;
+    var timer_proc_mess_delay = 2000; //number of miliseconds.
     //var load_bal_stats = {};
 
     //app.use(express.static(path.join(__dirname, 'public')));
@@ -328,7 +351,7 @@ if (cluster.isMaster) {
 
         var ws = fs.createWriteStream(arg_obj.root + '/' + arg_obj.node + '/' + struct_cache_file);
         ws.setEncoding = 'utf8';
-        ws.write(JSON.stringify(process.env.struct_cache));
+        ws.write(JSON.stringify(glob.struct_cache));
         ws.end();
     }
 
@@ -433,7 +456,6 @@ if (cluster.isMaster) {
 
         rs.on('error', function(e){
             console.log('error could not read cache');
-            process.env.struct_cache = {};
             self.init_count++; //ignore failure.
             self.init_complete();
         })
@@ -443,7 +465,9 @@ if (cluster.isMaster) {
         });
 
         rs.on('end', function() {
-            process.env.struct_cache = JSON.parse(data.join());
+            console.log(glob.struct_cache);
+            glob.struct_cache = JSON.parse(data.join());
+            console.log(glob.struct_cache);
             self.init_count++;
             self.init_complete();
         });
@@ -491,16 +515,16 @@ if (cluster.isMaster) {
 
     ninjadb.prototype.recursive_create_dir = function(id_obj, depth, max, callback) {
         var self = this;
-        console.log('recursive_create_dir:'+id_obj);
+        //console.log('recursive_create_dir:'+id_obj);
         if (depth > max) {
             //we have gone through all the id entries. we are done.
-            console.log('recusive_dir_complete:');
+            //console.log('recusive_dir_complete:');
             return callback();
         }
         var new_depth = depth+1;
         var key=id_obj.s1.slice(0, new_depth).join();
-
-        if (process.env.struct_cache[key] > 0) {
+        console.log('recursive_create_dir:' + glob.struct_cache);
+        if (glob.struct_cache[key] > 0) {
             //folder already exists we are done.
             console.log('cache exists:');
             self.recursive_create_dir(id_obj, new_depth, max, callback);
@@ -512,12 +536,12 @@ if (cluster.isMaster) {
                     console.log('mk call back called');
                     if (!e) {
                         //created file
-                        process.env.struct_cache[key] = 1;
-                        process.send(JSON.stringify({type:2, mess:key}));
+                        glob.struct_cache[key] = 1;
+                        process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
                     } else {
                         if(e.code === 'EEXIST'){
-                            process.env.struct_cache[key] = 1;
-                            process.send(JSON.stringify({type:2, mess:key}));
+                            glob.struct_cache[key] = 1;
+                            process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
                         }
                     }
                     self.recursive_create_dir(id_obj, new_depth, max, callback);
@@ -584,31 +608,36 @@ if (cluster.isMaster) {
         self.init_table_list();
         self.init_cache();
 
+        glob.struct_cache = { init: 0 };
+        glob.load_bal_stats = { chosen_node: 0};
+
+        console.log('init:'+glob.struct_cache);
+        console.log('init:'+glob.chosen_node);
     };
 
     ninjadb.prototype.get_next_node = function(suggest_id){
         var self=this;
-        var message_json = JSON.parse(process.env.message_jsonstr);
-
+        //var message_json = JSON.parse(process.env.message_jsonstr);
+        console.log(glob);
         if(suggest_id != ''){
             //***TODO: check the suggestion is even valid.
             //update load_bal_stats.
             //this should be a suggestion - not a demand... balancing algorithm should have opertunity to decide over it.
-            process.env.load_bal_stats.chosen_node = suggest_id;
+            glob.load_bal_stats.chosen_node = suggest_id;
         }else{
             //use load balancing algorithm to choose database store to use.
             console.log('get next node, node_list_length:' + self.node_list_length);
             console.log('the node list' + self.node_list);
             //currently load balance is just round robin.
             do{
-                console.log('current node:' + js_env_lbs.chosen_node);
-                process.env.load_bal_stats.chosen_node = (process.env.load_bal_stats.chosen_node + 1) % (self.node_list_length);
-                console.log('get next node:' + js_env_lbs.chosen_node);
-            }while(self.node_list[process.env.load_bal_stats.chosen_node].type != 'node')
+                console.log('current node:' + glob.load_bal_stats.chosen_node);
+                glob.load_bal_stats.chosen_node = (glob.load_bal_stats.chosen_node + 1) % (self.node_list_length);
+                console.log('get next node:' + glob.load_bal_stats.chosen_node);
+            }while(self.node_list[glob.load_bal_stats.chosen_node].type != 'node')
             //process.env.message_jsonstr = JSON.stringify(message_json);
         }
-        process.send(JSON.stringify({type:1, mess: process.env.load_bal_stats})); //inform parent process to broadcast to all forks
-        return process.env.load_bal_stats.chosen_node;
+        process.send(JSON.stringify({src:cluster.worker.id, type:1, mess: JSON.stringify(glob.load_bal_stats)})); //inform parent process to broadcast to all forks
+        return glob.load_bal_stats.chosen_node;
     }
     
     ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
@@ -622,7 +651,7 @@ if (cluster.isMaster) {
         //attempt to save the struct_cache.
         var self=this;
         console.log('exit handler:' + self);
-        writefs_struct_cache_sync(nj.arg_obj.root + '/' + nj.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(nj.struct_cache));
+        //writefs_struct_cache_sync(nj.arg_obj.root + '/' + nj.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(nj.struct_cache));
         process.exit();
     }
 
@@ -632,6 +661,9 @@ if (cluster.isMaster) {
     }
 
     ninja = new ninjadb();
+
+    //set up polling on message queue.
+    timer_proc_mess = setInterval(process_mess, timer_proc_mess_delay);
 
     //do something when app is closing
     process.on('exit', ninja.exitHandler.bind(null,{exit:true}));
