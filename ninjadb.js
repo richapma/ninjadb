@@ -37,13 +37,12 @@ process.send({json data});   // In Worker part
 worker.on('message', yourCallbackFunc(jsonData));    // In Master part
 
 */
-//***TODO: updated messaging to maintain cache_struct and load_bal_stats...  TEST!!!!
+//***TODO: glob.struct_cache does not seem to be constructing.
 
 var cluster = require('cluster')
 
 process.stdin.resume(); //stop program closing instantly;
-
-var glob = {};
+//process.env.message_queue = '';
 
 var merge_jsonstr = function(s1, s2){
     //make copy of objects pushed in.
@@ -58,30 +57,31 @@ var merge_jsonstr = function(s1, s2){
 }
 
 function process_mess(){
-    var messages = process.env.mess.split('}|{');
-    //clear the queue.
-    process.env.message_queue = '';
-
-    for(var i=0, j=messages.length; i<j;i++)
-    {
-        var obj = JSON.parse(messages[i]);
-        console.log(obj.mess);
-        console.log('process_mess:'+ glob.struct_cache);
-        console.log('process_mess:'+ glob.load_bal_stats);
-        if(message.src != process.env.src){
-            if(obj.type > 2){
-                //obj.type == 3
-            }else if(obj.type > 1){
-                //obj.type == 2    
-                //struct_cache 
-                glob.struct_cache[obj.mess] = 1;   
-            }else if(obj.type > 0){
+    console.log('process_mess called');
+    console.log('process_mess:' + JSON.stringify(process.env));
+    if(process.env.hasOwnProperty('message_queue') && process.env.message_queue != ''){
+        console.log('process_mess:'+process.env.message_queue);
+        var messages = process.env.message_queue.split('}|{');
+        console.log('message count:'+messages.length);
+        //clear the queue.
+        process.env.message_queue = '';
+          try{
+            console.log(messages);
+            var obj = JSON.parse(messages[i]);
+            console.log('process_mess parsing JSON message:'+messages[i]);
+            //if(message.src != process.env.src){
+            if(obj.type > 0){
                 //obj.type == 1
                 //load_bal_stats
                 glob.load_bal_stats = obj.mess;
                 console.log(glob);
             }
-        }
+            //}
+                
+            }catch(err){
+                //bah
+                console.log(err);
+            }
     }
 }
 
@@ -109,9 +109,9 @@ if (cluster.isMaster) {
         console.log('new fork:' + fk);
         worker[fk.id] = fk;
 
-        worker[fk.id].on('message', function(mess){
+        /*worker[fk.id].on('message', function(mess){
             var self = this;
-
+            console.log('worker received messages');
             if(process.env.message_queue != '')
             {
                 //add a message seperator }|{ to be used for splitting on later.
@@ -119,7 +119,9 @@ if (cluster.isMaster) {
             }else{
                 process.env.message_queue += mess;
             }
-        });        
+            //process.env.message_queue = mess;
+            console.log('worker:' + process.env.message_queue);
+        });*/        
     }
 }else{
     var fs = require('graceful-fs');
@@ -131,13 +133,18 @@ if (cluster.isMaster) {
     };
     
     var express = require('express');
+    var io = require('socket.io');
     var cookieParser = require('cookie-parser');
     var bodyParser = require('body-parser');
     var expressSession = require('express-session'); //used but not with the memorystore.
-    var server = null;
+    var web_server = null;       //server for web client access.
+    var socket_server = null;    //server for web client access.
+    var sockets = [];            //stores connections from this node to all other nodes on a per cpu basis.
     var ninja = null;
     // create instance of express
     var app = express();
+    var socket_app = express();
+
     var router = express.Router();
     // define middleware
     //ninjadb.use(express.static(path.join(__dirname, '../client')));
@@ -390,14 +397,54 @@ if (cluster.isMaster) {
             //ninjadb.get('port', process.env.PORT || 3000);
             //***TODO: find the node that belongs to us. 
             console.log('starting server...');
-            server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].port, '::', function(){
-                    console.log('Ninjadb listening on port ' + server.address().port);
+            web_server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].port, '::', function(){
+                    console.log('Ninjadb listening on port ' + web_server.address().port);
                 });
-            /*server = app.listen(self.node_list[self.arg_obj.node].port, '::', function() {
-                console.log('Ninjadb listening on port ' + server.address().port);
-            });*/
+
+            socket_server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].wss_from_port + parseInt(cluster.worker.id), '::', function(){
+                    console.log('Ninjadb listening on port ' + socket_server.address().port);
+                });
+
+            io = io.listen(socket_server);
+            io.on('connection', function(socket) { 
+                //wire up events.
+                socket.on('update_cache', function (data){
+                    //inform every node connected to this node to update the cache.
+                    socket.emit('update_cache', { data_packet: data });
+                }); 
+
+            });
+
+            //attempt to establish connections to all other nodes now.
+            var counting = -1;
+            for(var i =0; i<self.node_list.length;i++){
+                for(var j=0; j<self.node_list[i].cpu_count; j++){
+                    counting++;
+
+                    //do not connect to self.
+                    if(i != self.arg_obj.node || (i == self.arg_obj.node && j != cluster.worker.id)){
+                        if(self.node_list[i].ip6){
+                            sockets[counting] = io.connect('https://[' + self.node_list[i].ip6 + ']:' + self.node_list[i].wss_from_port + j, {
+                                'reconnection': true,
+                                'reconnectionDelay': 1000
+                            });
+                        }else{
+                            sockets[counting] = io.connect('https://' + self.node_list[i].ip4 + ':' + self.node_list[i].wss_from_port + j, {
+                                'reconnection': true,
+                                'reconnectionDelay': 1000
+                            });
+                        }
+
+                        socket.on('update_cache', function (data) {
+                            //update the cache:
+                            console.log(data);            
+                        });
+                    }
+                }
+            }
         }
     }
+    
 
     ninjadb.prototype.init_node_list = function(){
         var self = this;
@@ -465,9 +512,9 @@ if (cluster.isMaster) {
         });
 
         rs.on('end', function() {
-            console.log(glob.struct_cache);
-            glob.struct_cache = JSON.parse(data.join());
-            console.log(glob.struct_cache);
+            console.log('init cache:' + glob.struct_cache);
+            //glob.struct_cache = JSON.parse(data.join());
+            console.log('init cache:' + glob.struct_cache);
             self.init_count++;
             self.init_complete();
         });
@@ -522,32 +569,39 @@ if (cluster.isMaster) {
             return callback();
         }
         var new_depth = depth+1;
-        var key=id_obj.s1.slice(0, new_depth).join();
-        console.log('recursive_create_dir:' + glob.struct_cache);
+        var key = id_obj.s1.slice(0, new_depth).join('/');
+        console.log('recursive:' + JSON.stringify(glob));
+        //glob.struct_cache[key] = 1;
         if (glob.struct_cache[key] > 0) {
             //folder already exists we are done.
-            console.log('cache exists:');
             self.recursive_create_dir(id_obj, new_depth, max, callback);
         } else {
             var path = self.arg_obj.root + '/' + id_obj.s1.slice(0, new_depth).join('/');
             console.log('calling mkdir:' + path);
+            console.log('recursive:' + JSON.stringify(glob));
             fs.mkdir(path,
                 function(e) {
                     console.log('mk call back called');
+                    console.log('recursive:' + JSON.stringify(glob));
                     if (!e) {
                         //created file
+                        console.log('recursive key:' + key);
                         glob.struct_cache[key] = 1;
+                        console.log('recursive:' + JSON.stringify(glob));
                         process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
                     } else {
+                        console.log('recursive:' + JSON.stringify(glob));
                         if(e.code === 'EEXIST'){
                             glob.struct_cache[key] = 1;
                             process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
                         }
                     }
+                    console.log('recursive:' + JSON.stringify(glob));
                     self.recursive_create_dir(id_obj, new_depth, max, callback);
                 }
             );
         }
+        
     }
 
     ninjadb.prototype.allow_access = function(ip){
@@ -608,11 +662,12 @@ if (cluster.isMaster) {
         self.init_table_list();
         self.init_cache();
 
-        glob.struct_cache = { init: 0 };
+        process.env.src = cluster.worker.id;
+        glob = {};
+        glob.struct_cache = {};
         glob.load_bal_stats = { chosen_node: 0};
 
-        console.log('init:'+glob.struct_cache);
-        console.log('init:'+glob.chosen_node);
+        console.log('init:' + JSON.stringify(glob));
     };
 
     ninjadb.prototype.get_next_node = function(suggest_id){
@@ -650,7 +705,7 @@ if (cluster.isMaster) {
         //NO ASYNC FUNCTIONS ALLOWED HERE!.
         //attempt to save the struct_cache.
         var self=this;
-        console.log('exit handler:' + self);
+        console.log('exit handler:' + err);
         //writefs_struct_cache_sync(nj.arg_obj.root + '/' + nj.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(nj.struct_cache));
         process.exit();
     }
@@ -661,9 +716,6 @@ if (cluster.isMaster) {
     }
 
     ninja = new ninjadb();
-
-    //set up polling on message queue.
-    timer_proc_mess = setInterval(process_mess, timer_proc_mess_delay);
 
     //do something when app is closing
     process.on('exit', ninja.exitHandler.bind(null,{exit:true}));
@@ -676,7 +728,6 @@ if (cluster.isMaster) {
 
     ninja.init();
 
-    console.log(process.env);
 }
 
 cluster.on('exit', function (worker) {

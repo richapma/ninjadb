@@ -1,5 +1,5 @@
 [
-    {"type":"master","node_name":"node1", "syncnodes":["null"],"synctype":0,"ip4":"0.0.0.0","ip6":"::1","port":3000,"dbsize_weight":0.0,"reqs_rate_weight":0.0,"active_conns_weight":0},
-    {"type":"node","node_name":"node2", "syncnodes":["node1","node2"],"synctype":1,"ip4":"0.0.0.0","ip6":"::1","port":3001,"dbsize_weight":0.5,"reqs_rate_weight":0.25,"active_conns_weight":0.25},
-	{"type":"website","node_name":"website","syncnodes":["null"],"synctype":0,"ip4":"0.0.0.0","ip6":"::1","port":"null","dbsize_weight":0,"reqs_rate_weight":0,"active_conns_weight":0}
+    {"type":"node","node_name":"node1", "ip4":"0.0.0.0", "ip6":"::","port":3000,"wss_from_port":50000, "cpu_count":4},
+    {"type":"node","node_name":"node2", "ip4":"0.0.0.0", "ip6":"::","port":3001,"wss_from_port":50101, "cpu_count":4},
+    {"type":"node","node_name":"node2", "ip4":"0.0.0.0", "ip6":"::","port":3002,"wss_from_port":50201, "cpu_count":4},
 ]
