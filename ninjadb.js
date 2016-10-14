@@ -134,6 +134,7 @@ if (cluster.isMaster) {
     
     var express = require('express');
     var io = require('socket.io');
+    var io_client = require('socket.io-client');
     var cookieParser = require('cookie-parser');
     var bodyParser = require('body-parser');
     var expressSession = require('express-session'); //used but not with the memorystore.
@@ -424,18 +425,22 @@ if (cluster.isMaster) {
                     //do not connect to self.
                     if(i != self.arg_obj.node || (i == self.arg_obj.node && j != cluster.worker.id)){
                         if(self.node_list[i].ip6){
-                            sockets[counting] = io.connect('https://[' + self.node_list[i].ip6 + ']:' + self.node_list[i].wss_from_port + j, {
+                            sockets[counting] = io_client.connect('https://[' + self.node_list[i].ip6 + ']:' + self.node_list[i].wss_from_port + j, {
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
                         }else{
-                            sockets[counting] = io.connect('https://' + self.node_list[i].ip4 + ':' + self.node_list[i].wss_from_port + j, {
+                            sockets[counting] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + self.node_list[i].wss_from_port + j, {
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
                         }
 
-                        socket.on('update_cache', function (data) {
+                        sockets[counting].on('connect', function (socket){
+                            console.log('connected!');
+                        });
+
+                        sockets[counting].on('update_cache', function (data) {
                             //update the cache:
                             console.log(data);            
                         });
@@ -666,7 +671,7 @@ if (cluster.isMaster) {
         glob = {};
         glob.struct_cache = {};
         glob.load_bal_stats = { chosen_node: 0};
-
+        console.log(glob);
         console.log('init:' + JSON.stringify(glob));
     };
 
