@@ -97,11 +97,13 @@ process.on('message', function(mess){
     }
 });
 
+
 if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
     var worker = {};
 
+    cores = 1;
     // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
         var fk = cluster.fork();
@@ -127,6 +129,7 @@ if (cluster.isMaster) {
     var fs = require('graceful-fs');
     var events = require('events');
     var https = require('https');
+    var http = require('http');
     var server_options = {
         key:    fs.readFileSync('key.pem'),
         cert:   fs.readFileSync('cert.pem')
@@ -159,6 +162,10 @@ if (cluster.isMaster) {
         resave: false,
         saveUninitialized: false
     }));
+
+    socket_app.get('/', function(req, res){
+        res.send('<h1>Hello world</h1>');
+    });
 
     //global variables.
     var arg_obj = {}; //command line arguments object
@@ -317,6 +324,7 @@ if (cluster.isMaster) {
     console.log('app use');
     app.use('/', router);
 
+    //app_socket.use(function(req,res){});
     // error
     app.use(function(req, res, next) {
     var err = new Error('Not Found');
@@ -398,23 +406,28 @@ if (cluster.isMaster) {
             //ninjadb.get('port', process.env.PORT || 3000);
             //***TODO: find the node that belongs to us. 
             console.log('starting server...');
-            web_server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].port, '::', function(){
-                    console.log('Ninjadb listening on port ' + web_server.address().port);
+            web_server = https.createServer(server_options, app).listen(parseInt(self.node_list[self.arg_obj.node].port), '::', function(){
+                    console.log('Ninjadb webserver listening on port ' + web_server.address().port);
                 });
 
-            socket_server = https.createServer(server_options, app).listen(self.node_list[self.arg_obj.node].wss_from_port + parseInt(cluster.worker.id), '::', function(){
-                    console.log('Ninjadb listening on port ' + socket_server.address().port);
+            //server_options, 
+            socket_server = https.createServer(server_options, socket_app).listen((parseInt(self.node_list[self.arg_obj.node].wss_from_port) + parseInt(cluster.worker.id-1)), '::', function(){
+                    console.log('Ninjadb socket listening on port ' + socket_server.address().port);
                 });
 
             io = io.listen(socket_server);
             io.on('connection', function(socket) { 
                 //wire up events.
+                io.emit('hello','hello world');
+
+                console.log('server connection...')
                 socket.on('update_cache', function (data){
                     //inform every node connected to this node to update the cache.
                     socket.emit('update_cache', { data_packet: data });
                 }); 
-
             });
+
+            io.on('error', function(obj){console.log(JSON.stringify(obj));});
 
             //attempt to establish connections to all other nodes now.
             var counting = -1;
@@ -423,14 +436,19 @@ if (cluster.isMaster) {
                     counting++;
 
                     //do not connect to self.
-                    if(i != self.arg_obj.node || (i == self.arg_obj.node && j != cluster.worker.id)){
+                    console.log('choose where to connect: i am node:' + self.arg_obj.node + ' i:' + i + ' cluster id:' + cluster.worker.id-1);
+                    if(i != self.arg_obj.node || (i == self.arg_obj.node && j != (cluster.worker.id-1))){
                         if(self.node_list[i].ip6){
-                            sockets[counting] = io_client.connect('https://[' + self.node_list[i].ip6 + ']:' + self.node_list[i].wss_from_port + j, {
+                            console.log('ip6:' + self.node_list[i].ip6 + ':' + (parseInt(self.node_list[i].wss_from_port) + j));
+                            sockets[counting] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (parseInt(self.node_list[i].wss_from_port) + j), {
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
                         }else{
-                            sockets[counting] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + self.node_list[i].wss_from_port + j, {
+                            console.log('attempting to connect to ip4:' + self.node_list[i].ip4 + ':' + (parseInt(self.node_list[i].wss_from_port) + j));
+                            sockets[counting] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (parseInt(self.node_list[i].wss_from_port) + j), {
+                                'secure': true,
+                                'transports': ['websocket'],
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
@@ -439,6 +457,14 @@ if (cluster.isMaster) {
                         sockets[counting].on('connect', function (socket){
                             console.log('connected!');
                         });
+
+                        sockets[counting].on('connect_error', function(err){console.log('connect error:'+JSON.stringify(err));});
+
+                        sockets[counting].on('reconnecting', function(err){console.log('reconnecting:'+JSON.stringify(err));});
+
+                        sockets[counting].on('reconnect_error', function(err){console.log('reconnect error:'+JSON.stringify(err));});
+
+                        sockets[counting].on('reconnect_failed', function(err){console.log('reconnect failed:'+JSON.stringify(err));});
 
                         sockets[counting].on('update_cache', function (data) {
                             //update the cache:
@@ -554,6 +580,8 @@ if (cluster.isMaster) {
         for (var i = 0; i < arr.length; i += 2) {
             arg[arr[i].substring(2)] = arr[i + 1];
         }
+
+        arg.node = parseInt(arg.node);
         return arg;
     }
 
@@ -593,12 +621,12 @@ if (cluster.isMaster) {
                         console.log('recursive key:' + key);
                         glob.struct_cache[key] = 1;
                         console.log('recursive:' + JSON.stringify(glob));
-                        process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
+                        //process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
                     } else {
                         console.log('recursive:' + JSON.stringify(glob));
                         if(e.code === 'EEXIST'){
                             glob.struct_cache[key] = 1;
-                            process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
+                            //process.send(JSON.stringify({src:cluster.worker.id, type:2, mess:key}));
                         }
                     }
                     console.log('recursive:' + JSON.stringify(glob));
@@ -667,7 +695,7 @@ if (cluster.isMaster) {
         self.init_table_list();
         self.init_cache();
 
-        process.env.src = cluster.worker.id;
+        //process.env.src = cluster.worker.id;
         glob = {};
         glob.struct_cache = {};
         glob.load_bal_stats = { chosen_node: 0};
@@ -696,7 +724,7 @@ if (cluster.isMaster) {
             }while(self.node_list[glob.load_bal_stats.chosen_node].type != 'node')
             //process.env.message_jsonstr = JSON.stringify(message_json);
         }
-        process.send(JSON.stringify({src:cluster.worker.id, type:1, mess: JSON.stringify(glob.load_bal_stats)})); //inform parent process to broadcast to all forks
+        //process.send(JSON.stringify({src:cluster.worker.id, type:1, mess: JSON.stringify(glob.load_bal_stats)})); //inform parent process to broadcast to all forks
         return glob.load_bal_stats.chosen_node;
     }
     
