@@ -103,7 +103,7 @@ if (cluster.isMaster) {
     var cores = require('os').cpus().length;
     var worker = {};
 
-    cores = 1;
+    cores = 2;
     // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
         var fk = cluster.fork();
@@ -417,11 +417,15 @@ if (cluster.isMaster) {
 
             io = io.listen(socket_server);
             io.on('connection', function(socket) { 
-                //wire up events.
-                io.emit('hello','hello world');
+                console.log('socket connection on server.');
 
-                console.log('server connection...')
-                socket.on('update_cache', function (data){
+                io.emit('echo','hello');
+                //wire up events.
+                io.on('echo', function(data){
+                    console.log('received echo event on server');
+                });
+
+                io.on('update_cache', function (data){
                     //inform every node connected to this node to update the cache.
                     socket.emit('update_cache', { data_packet: data });
                 }); 
@@ -430,29 +434,35 @@ if (cluster.isMaster) {
             io.on('error', function(obj){console.log(JSON.stringify(obj));});
 
             //attempt to establish connections to all other nodes now.
+            console.log('i am node:' + self.arg_obj.node + ' cpu:' + (parseInt(cluster.worker.id)-1));
             var counting = -1;
+            var worker_id = null;
             for(var i =0; i<self.node_list.length;i++){
+                var start_port = parseInt(self.node_list[i].wss_from_port);
+
                 for(var j=0; j<self.node_list[i].cpu_count; j++){
                     counting++;
-
+                    worker_id = parseInt(cluster.worker.id)-1;
                     //do not connect to self.
-                    console.log('choose where to connect: i am node:' + self.arg_obj.node + ' i:' + i + ' cluster id:' + cluster.worker.id-1);
-                    if(i != self.arg_obj.node || (i == self.arg_obj.node && j != (cluster.worker.id-1))){
+                    if(i != self.arg_obj.node || (i == self.arg_obj.node && j != worker_id)){
+                        console.log('node:' + i + ' cpu:' + j);
+                        console.log('port:' + (parseInt(self.node_list[i].wss_from_port) + j));
                         if(self.node_list[i].ip6){
-                            console.log('ip6:' + self.node_list[i].ip6 + ':' + (parseInt(self.node_list[i].wss_from_port) + j));
-                            sockets[counting] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (parseInt(self.node_list[i].wss_from_port) + j), {
+                            console.log('ip6:' + self.node_list[i].ip6 + ':' + (start_port + j));
+                            sockets[counting] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (start_port + j), {
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
                         }else{
-                            console.log('attempting to connect to ip4:' + self.node_list[i].ip4 + ':' + (parseInt(self.node_list[i].wss_from_port) + j));
-                            sockets[counting] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (parseInt(self.node_list[i].wss_from_port) + j), {
+                            console.log('attempting to connect to ip4:' + self.node_list[i].ip4 + ':' + (start_port + j));
+                            sockets[counting] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (start_port + j), {
                                 'secure': true,
                                 'transports': ['websocket'],
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
                         }
+                    
 
                         sockets[counting].on('connect', function (socket){
                             console.log('connected!');
@@ -466,11 +476,18 @@ if (cluster.isMaster) {
 
                         sockets[counting].on('reconnect_failed', function(err){console.log('reconnect failed:'+JSON.stringify(err));});
 
+                        sockets[counting].on('echo', function (data) {
+                            var worker_id = parseInt(cluster.worker.id)-1;
+                            console.log('echo received on node:' + self.arg_obj.node + ' cpu:' + worker_id);
+                        });
+
                         sockets[counting].on('update_cache', function (data) {
                             //update the cache:
                             console.log(data);            
                         });
+
                     }
+
                 }
             }
         }
