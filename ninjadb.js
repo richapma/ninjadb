@@ -141,9 +141,10 @@ if (cluster.isMaster) {
     var cookieParser = require('cookie-parser');
     var bodyParser = require('body-parser');
     var expressSession = require('express-session'); //used but not with the memorystore.
+    var in_bound;                //stores what is connected to this node.
+    var out_bound = [];          //stores connections from this node to all other nodes on a per cpu basis.
     var web_server = null;       //server for web client access.
     var socket_server = null;    //server for web client access.
-    var sockets = [];            //stores connections from this node to all other nodes on a per cpu basis.
     var ninja = null;
     // create instance of express
     var app = express();
@@ -396,6 +397,13 @@ if (cluster.isMaster) {
 
     ninjadb.prototype = new events.EventEmitter;
 
+    ninjadb.prototype.emit_to_cpus = function(obj)
+    {
+        for(var j=0; j<self.node_list[i].cpu_count; j++){
+            out_bound[self.arg_obj.node][j]
+        }
+    }
+
     ninjadb.prototype.init_complete = function(){
         var self = this;
         console.log('init complete');
@@ -415,23 +423,23 @@ if (cluster.isMaster) {
                     console.log('Ninjadb socket listening on port ' + socket_server.address().port);
                 });
 
-            io = io.listen(socket_server);
-            io.on('connection', function(socket) { 
+            in_bound = io.listen(socket_server);
+            in_bound.on('connection', function(socket) { 
                 console.log('socket connection on server.');
 
-                io.emit('echo','hello');
+                in_bound.emit('echo','hello');
                 //wire up events.
-                io.on('echo', function(data){
+                in_bound.on('echo', function(data){
                     console.log('received echo event on server');
                 });
 
-                io.on('update_cache', function (data){
-                    //inform every node connected to this node to update the cache.
-                    socket.emit('update_cache', { data_packet: data });
+                in_bound.on('update_cache', function (data){
+                    //update the local cache.
+                    glob.struct_cache[data.key] = 1;
                 }); 
             });
 
-            io.on('error', function(obj){console.log(JSON.stringify(obj));});
+            in_bound.on('error', function(obj){console.log(JSON.stringify(obj));});
 
             //attempt to establish connections to all other nodes now.
             console.log('i am node:' + self.arg_obj.node + ' cpu:' + (parseInt(cluster.worker.id)-1));
@@ -439,7 +447,7 @@ if (cluster.isMaster) {
             var worker_id = null;
             for(var i =0; i<self.node_list.length;i++){
                 var start_port = parseInt(self.node_list[i].wss_from_port);
-
+                out_bound[i] = [];
                 for(var j=0; j<self.node_list[i].cpu_count; j++){
                     counting++;
                     worker_id = parseInt(cluster.worker.id)-1;
@@ -449,13 +457,13 @@ if (cluster.isMaster) {
                         console.log('port:' + (parseInt(self.node_list[i].wss_from_port) + j));
                         if(self.node_list[i].ip6){
                             console.log('ip6:' + self.node_list[i].ip6 + ':' + (start_port + j));
-                            sockets[counting] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (start_port + j), {
+                            out_bound[i][j] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (start_port + j), {
                                 'reconnection': true,
                                 'reconnectionDelay': 1000
                             });
                         }else{
                             console.log('attempting to connect to ip4:' + self.node_list[i].ip4 + ':' + (start_port + j));
-                            sockets[counting] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (start_port + j), {
+                            out_bound[i][j] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (start_port + j), {
                                 'secure': true,
                                 'transports': ['websocket'],
                                 'reconnection': true,
@@ -463,27 +471,21 @@ if (cluster.isMaster) {
                             });
                         }
                     
-
-                        sockets[counting].on('connect', function (socket){
+                        out_bound[i][j].on('connect', function (socket){
                             console.log('connected!');
                         });
 
-                        sockets[counting].on('connect_error', function(err){console.log('connect error:'+JSON.stringify(err));});
+                        out_bound[i][j].on('connect_error', function(err){console.log('connect error:'+JSON.stringify(err));});
 
-                        sockets[counting].on('reconnecting', function(err){console.log('reconnecting:'+JSON.stringify(err));});
+                        out_bound[i][j].on('reconnecting', function(err){console.log('reconnecting:'+JSON.stringify(err));});
 
-                        sockets[counting].on('reconnect_error', function(err){console.log('reconnect error:'+JSON.stringify(err));});
+                        out_bound[i][j].on('reconnect_error', function(err){console.log('reconnect error:'+JSON.stringify(err));});
 
-                        sockets[counting].on('reconnect_failed', function(err){console.log('reconnect failed:'+JSON.stringify(err));});
+                        out_bound[i][j].on('reconnect_failed', function(err){console.log('reconnect failed:'+JSON.stringify(err));});
 
-                        sockets[counting].on('echo', function (data) {
+                        out_bound[i][j].on('echo', function (data) {
                             var worker_id = parseInt(cluster.worker.id)-1;
                             console.log('echo received on node:' + self.arg_obj.node + ' cpu:' + worker_id);
-                        });
-
-                        sockets[counting].on('update_cache', function (data) {
-                            //update the cache:
-                            console.log(data);            
                         });
 
                     }
