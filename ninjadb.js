@@ -12,11 +12,10 @@ make fields prefixed with _ to be automatically indexed.
 if the object being saved has fields prefixed with an __ it is automatically indexed for text searching.
 prefixes might be changed...
 maybe add stat files to different file structure nodes and update them as records are inserted so always up to date - with a rebuild feature.
+maybe create a batch id, so all records updated/created are then associated with this batch.
+add id index, see id.idx for format.
+build function for handling where to store file etc. it is this function then that can be used to change how data is stored.
 */
-
-//***TO DO:
-//add id index.
-//create a batch id, so all records updated/created are then associated with this batch.
 
 //var fs = require('fs');
 //https://github.com/isaacs/node-graceful-fs
