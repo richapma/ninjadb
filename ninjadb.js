@@ -99,7 +99,7 @@ if (cluster.isMaster) {
     var arg_obj = {}; //command line arguments object
     //var struct_cache = {};
     var open_files = {};
-    var table_list = [];
+    var table_list = {};
     var node_list = {};
 
     var idcount = 0;  //initialize to zero.
@@ -132,10 +132,9 @@ if (cluster.isMaster) {
     var table_list_file   = 'table.list';
     var node_list_file    = 'node.list';
     var access_list_file  = 'access.list';
-
-    var timer_proc_mess = null;
-    var timer_proc_mess_delay = 2000; //number of miliseconds.
-    //var load_bal_stats = {};
+    
+    var load_time_slot_size = 2000; //time slot in milliseconds.
+    var deltat;
 
     //app.use(express.static(path.join(__dirname, 'public')));
     router.put('/pass/:secret', function(req, res){
@@ -442,6 +441,8 @@ if (cluster.isMaster) {
               }
             }
 
+            deltat = load_time_slot_size / self.node_list_length;
+
             self.init_count++;
             self.init_complete();
             self.init_access_list();
@@ -644,27 +645,31 @@ if (cluster.isMaster) {
 
         //process.env.src = cluster.worker.id;
         glob = {};
-        glob.struct_cache = {};
-        glob.load_bal_stats = { chosen_node: 0};
+
         console.log(glob);
         console.log('init:' + JSON.stringify(glob));
     };
 
+    ninjadb.prototype.get_milliseconds = function(){
+        var self=this;
+        var dt = new Date();
+
+        var mill = (dt.getSeconds()*1000+dt.getMilliseconds) % load_time_slot_size;
+        return mill;
+    }
+
     ninjadb.prototype.get_next_node = function(suggest_id){
         var self=this;
-        //var message_json = JSON.parse(process.env.message_jsonstr);
+
         console.log(glob);
         if(suggest_id != ''){
             //***TODO: check the suggestion is even valid.
-            //update load_bal_stats.
-            //this should be a suggestion - not a demand... balancing algorithm should have opertunity to decide over it.
-            glob.load_bal_stats.chosen_node = suggest_id;
+            return suggest_id;
         }else{
             //use load balancing algorithm to choose database store to use.
             //slice a time window with number of nodes
+            return math.floor(this.get_milliseconds()/deltat);
         }
-        //process.send(JSON.stringify({src:cluster.worker.id, type:1, mess: JSON.stringify(glob.load_bal_stats)})); //inform parent process to broadcast to all forks
-        return glob.load_bal_stats.chosen_node;
     }
     
     ninjadb.prototype.writefs_struct_cache_sync = function(path, cache) {
@@ -682,6 +687,7 @@ if (cluster.isMaster) {
         process.exit();
     }
 
+    ninjadb.prototype.
 
     ninjadb.prototype.test = function(){
 
