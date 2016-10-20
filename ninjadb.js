@@ -4,45 +4,26 @@ filename: ninjadb
 author: richard john chapman
 date: 2016-Sep-14
 description: node db server.
-comments: if the object being saved has fields prefixed with an _ its value is automatically indexed on it treating it as an internal id type that ninjadb uses.
+comments:
+//structure of id: {quarter:0-3=>1-4}/{month:0-2=>1-3}/{week:0-3=>1-4}/{day:0-6=>1-7}/{hh:0-9ab=>1-12}/{min:0-9=>00-50}/{seconds:0-6=>00-50/{milliseconds:0-9=>00-90/milliseconds_countid_tablenode.rec}
+
+TO DO:
+make fields prefixed with _ to be automatically indexed.
 if the object being saved has fields prefixed with an __ it is automatically indexed for text searching.
 prefixes might be changed...
 maybe add stat files to different file structure nodes and update them as records are inserted so always up to date - with a rebuild feature.
 */
 
 //***TO DO:
-//track stats on node.list for use in load balancing
-//update read function to forward to the node that has the data
-//add function to request node to use from nodes.
-//add security check based on incomming ip address has to be one of the nodes.
+//add id index.
 //create a batch id, so all records updated/created are then associated with this batch.
 
 //var fs = require('fs');
 //https://github.com/isaacs/node-graceful-fs
 
-/*
-TODO: Work adding messaging code so main thread can broadcast to sub threads so each worker can be updated with the current statistics of what secrets and node connections have been handed out.
-so load balencing can use the correct info.
-
-From Master to worker:
-//messaging structure.
-//{ key: { mess: JSON.stringify(message)}}
-worker.send({json data});    // In Master part
-
-process.on('message', yourCallbackFunc(jsonData));    // In Worker part
-
-From Worker to Master:
-process.send({json data});   // In Worker part
-
-worker.on('message', yourCallbackFunc(jsonData));    // In Master part
-
-*/
-//***TODO: glob.struct_cache does not seem to be constructing.
-
 var cluster = require('cluster')
 
 process.stdin.resume(); //stop program closing instantly;
-//process.env.message_queue = '';
 
 var merge_jsonstr = function(s1, s2){
     //make copy of objects pushed in.
@@ -56,48 +37,6 @@ var merge_jsonstr = function(s1, s2){
     return JSON.stringify(o3);
 }
 
-function process_mess(){
-    console.log('process_mess called');
-    console.log('process_mess:' + JSON.stringify(process.env));
-    if(process.env.hasOwnProperty('message_queue') && process.env.message_queue != ''){
-        console.log('process_mess:'+process.env.message_queue);
-        var messages = process.env.message_queue.split('}|{');
-        console.log('message count:'+messages.length);
-        //clear the queue.
-        process.env.message_queue = '';
-          try{
-            console.log(messages);
-            var obj = JSON.parse(messages[i]);
-            console.log('process_mess parsing JSON message:'+messages[i]);
-            //if(message.src != process.env.src){
-            if(obj.type > 0){
-                //obj.type == 1
-                //load_bal_stats
-                glob.load_bal_stats = obj.mess;
-                console.log(glob);
-            }
-            //}
-                
-            }catch(err){
-                //bah
-                console.log(err);
-            }
-    }
-}
-
-process.on('message', function(mess){
-    //received a message from one of the workers.
-    //broadcast message to all workers.
-
-    //received a message merge the object.
-    //process_mess(mess);
-
-    for(var thisworker in worker){
-        thisworker.send(mess);
-    }
-});
-
-
 if (cluster.isMaster) {
     // count the proc cores on machine.
     var cores = require('os').cpus().length;
@@ -110,22 +49,10 @@ if (cluster.isMaster) {
         
         console.log('new fork:' + fk);
         worker[fk.id] = fk;
-
-        /*worker[fk.id].on('message', function(mess){
-            var self = this;
-            console.log('worker received messages');
-            if(process.env.message_queue != '')
-            {
-                //add a message seperator }|{ to be used for splitting on later.
-                process.env.message_queue += '}|{' + mess;
-            }else{
-                process.env.message_queue += mess;
-            }
-            //process.env.message_queue = mess;
-            console.log('worker:' + process.env.message_queue);
-        });*/        
+      
     }
 }else{
+    
     var fs = require('graceful-fs');
     var events = require('events');
     var https = require('https');
@@ -173,7 +100,7 @@ if (cluster.isMaster) {
     //var struct_cache = {};
     var open_files = {};
     var table_list = [];
-    var node_list = [];
+    var node_list = {};
 
     var idcount = 0;  //initialize to zero.
     var months = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3];  //return the quarter that the month is in.
@@ -222,19 +149,17 @@ if (cluster.isMaster) {
     });
 
     console.log('request connection');
-    //check i am the master database node and if i am return the node i want the consumer to use.
+
     router.get('/request_connection/*', function(req, res){
-        if(ninja.allow_access(req.ip) && ninja.node_list[ninja.arg_obj.node].type == 'master'){
+        if(ninja.allow_access(req.ip)){
             var suggest_id = req.originalUrl.substring(20);
-            console.log(suggest_id);
-            //i am the master check 
+            
             res.status(200);
             //use load balencing to get the next node connection to use.
             var i = ninja.get_next_node(suggest_id);
             var options = {};
             
-            var secret = ninja.generate_id(new Date(), ninja.arg_obj.node, 0);
-            //***TODO: need to pass secret to database that will be accessed.
+            //var secret = ninja.generate_id(new Date(), ninja.arg_obj.node, 0);
             
             if(ninja.node_list[i].ip6 != '')
             {
@@ -347,13 +272,6 @@ if (cluster.isMaster) {
         console.log('--node_list "full path to a file containing the list of all nodes in the cluster"');
         console.log('--node {identify the node position i am in the list_nodes list}');
         console.log('--reset_count {how often to reset the id counter measured in seconds}');
-        /*file format of --node_list is:
-        [
-        {dns:'localhost', ip4:'127.0.0.1', ip6:'', port:2000, syncnodes:[0,1], synctype: 0},
-        {dns:'localhost', ip4:'127.0.0.1', ip6:'', port:2000, syncnodes:[0,1], synctype: 0},
-        {dns:'localhost', ip4:'127.0.0.1', ip6:'', port:2000, syncnodes:[0,1], synctype: 1}
-        ]
-        */
     }
 
     function check_args(arg_o) {
@@ -399,7 +317,8 @@ if (cluster.isMaster) {
 
     ninjadb.prototype.emit_to_cpus = function(obj)
     {
-        for(var j=0; j<self.node_list[i].cpu_count; j++){
+        
+        for(var j=0; j<self.node_list[self.arg_obj.node].cpu_count; j++){
             out_bound[self.arg_obj.node][j]
         }
     }
@@ -445,51 +364,53 @@ if (cluster.isMaster) {
             console.log('i am node:' + self.arg_obj.node + ' cpu:' + (parseInt(cluster.worker.id)-1));
             var counting = -1;
             var worker_id = null;
-            for(var i =0; i<self.node_list.length;i++){
-                var start_port = parseInt(self.node_list[i].wss_from_port);
-                out_bound[i] = [];
-                for(var j=0; j<self.node_list[i].cpu_count; j++){
-                    counting++;
-                    worker_id = parseInt(cluster.worker.id)-1;
-                    //do not connect to self.
-                    if(i != self.arg_obj.node || (i == self.arg_obj.node && j != worker_id)){
-                        console.log('node:' + i + ' cpu:' + j);
-                        console.log('port:' + (parseInt(self.node_list[i].wss_from_port) + j));
-                        if(self.node_list[i].ip6){
-                            console.log('ip6:' + self.node_list[i].ip6 + ':' + (start_port + j));
-                            out_bound[i][j] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (start_port + j), {
-                                'reconnection': true,
-                                'reconnectionDelay': 1000
+
+            for(var i in self.node_list) {
+                if(self.node_list.hasOwnProperty(i)){
+                    var start_port = parseInt(self.node_list[i].wss_from_port);
+                    out_bound[i] = [];
+                    for(var j=0; j<self.node_list[i].cpu_count; j++){
+                        counting++;
+                        worker_id = parseInt(cluster.worker.id)-1;
+                        //do not connect to self.
+                        if(i != self.arg_obj.node || (i == self.arg_obj.node && j != worker_id)){
+                            console.log('node:' + i + ' cpu:' + j);
+                            console.log('port:' + (parseInt(self.node_list[i].wss_from_port) + j));
+                            if(self.node_list[i].ip6){
+                                console.log('ip6:' + self.node_list[i].ip6 + ':' + (start_port + j));
+                                out_bound[i][j] = io_client.connect('http://[' + self.node_list[i].ip6 + ']:' + (start_port + j), {
+                                    'reconnection': true,
+                                    'reconnectionDelay': 1000
+                                });
+                            }else{
+                                console.log('attempting to connect to ip4:' + self.node_list[i].ip4 + ':' + (start_port + j));
+                                out_bound[i][j] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (start_port + j), {
+                                    'secure': true,
+                                    'transports': ['websocket'],
+                                    'reconnection': true,
+                                    'reconnectionDelay': 1000
+                                });
+                            }
+                        
+                            out_bound[i][j].on('connect', function (socket){
+                                console.log('connected!');
                             });
-                        }else{
-                            console.log('attempting to connect to ip4:' + self.node_list[i].ip4 + ':' + (start_port + j));
-                            out_bound[i][j] = io_client.connect('https://' + self.node_list[i].ip4 + ':' + (start_port + j), {
-                                'secure': true,
-                                'transports': ['websocket'],
-                                'reconnection': true,
-                                'reconnectionDelay': 1000
+
+                            out_bound[i][j].on('connect_error', function(err){console.log('connect error:'+JSON.stringify(err));});
+
+                            out_bound[i][j].on('reconnecting', function(err){console.log('reconnecting:'+JSON.stringify(err));});
+
+                            out_bound[i][j].on('reconnect_error', function(err){console.log('reconnect error:'+JSON.stringify(err));});
+
+                            out_bound[i][j].on('reconnect_failed', function(err){console.log('reconnect failed:'+JSON.stringify(err));});
+
+                            out_bound[i][j].on('echo', function (data) {
+                                var worker_id = parseInt(cluster.worker.id)-1;
+                                console.log('echo received on node:' + self.arg_obj.node + ' cpu:' + worker_id);
                             });
+
                         }
-                    
-                        out_bound[i][j].on('connect', function (socket){
-                            console.log('connected!');
-                        });
-
-                        out_bound[i][j].on('connect_error', function(err){console.log('connect error:'+JSON.stringify(err));});
-
-                        out_bound[i][j].on('reconnecting', function(err){console.log('reconnecting:'+JSON.stringify(err));});
-
-                        out_bound[i][j].on('reconnect_error', function(err){console.log('reconnect error:'+JSON.stringify(err));});
-
-                        out_bound[i][j].on('reconnect_failed', function(err){console.log('reconnect failed:'+JSON.stringify(err));});
-
-                        out_bound[i][j].on('echo', function (data) {
-                            var worker_id = parseInt(cluster.worker.id)-1;
-                            console.log('echo received on node:' + self.arg_obj.node + ' cpu:' + worker_id);
-                        });
-
                     }
-
                 }
             }
         }
@@ -505,7 +426,7 @@ if (cluster.isMaster) {
         rs.setEncoding('utf8');
 
         rs.on('error', function(e){
-            self.node_list = [];
+            self.node_list = {};
         });
 
         rs.on('data', function(chunk) {
@@ -514,8 +435,13 @@ if (cluster.isMaster) {
 
         rs.on('end', function() {
             self.node_list = JSON.parse(data.join());
-            console.log('init_node_list:' +  self.node_list.length);
-            self.node_list_length = self.node_list.length;
+            self.node_list_length = 0;
+            for(var i in self.node_list) {
+              if(self.node_list.hasOwnProperty(i)){
+                self.node_list_length++;
+              }
+            }
+
             self.init_count++;
             self.init_complete();
             self.init_access_list();
@@ -530,9 +456,11 @@ if (cluster.isMaster) {
         self.access_list = {};
         
         console.log(self.node_list);
-        for (var i=0; i<self.node_list_length; i++){
-            self.access_list[self.node_list[i].ip4] = 1;
-            self.access_list[self.node_list[i].ip6] = 1;                    
+        for(var i in self.node_list) {
+            if(self.node_list.hasOwnProperty(i)){
+                self.access_list[self.node_list[i].ip4] = 1;
+                self.access_list[self.node_list[i].ip6] = 1; 
+            }
         }
         
         console.log(self.access_list);
@@ -733,15 +661,7 @@ if (cluster.isMaster) {
             glob.load_bal_stats.chosen_node = suggest_id;
         }else{
             //use load balancing algorithm to choose database store to use.
-            console.log('get next node, node_list_length:' + self.node_list_length);
-            console.log('the node list' + self.node_list);
-            //currently load balance is just round robin.
-            do{
-                console.log('current node:' + glob.load_bal_stats.chosen_node);
-                glob.load_bal_stats.chosen_node = (glob.load_bal_stats.chosen_node + 1) % (self.node_list_length);
-                console.log('get next node:' + glob.load_bal_stats.chosen_node);
-            }while(self.node_list[glob.load_bal_stats.chosen_node].type != 'node')
-            //process.env.message_jsonstr = JSON.stringify(message_json);
+            //slice a time window with number of nodes
         }
         //process.send(JSON.stringify({src:cluster.worker.id, type:1, mess: JSON.stringify(glob.load_bal_stats)})); //inform parent process to broadcast to all forks
         return glob.load_bal_stats.chosen_node;
