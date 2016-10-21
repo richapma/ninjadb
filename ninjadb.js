@@ -41,7 +41,7 @@ if (cluster.isMaster) {
     var cores = require('os').cpus().length;
     var worker = {};
 
-    cores = 2;
+    cores = 1;
     // make worker processes one for each core.
     for (var i = 0; i < cores; i += 1) {
         var fk = cluster.fork();
@@ -311,7 +311,75 @@ if (cluster.isMaster) {
         console.log(self.arg_obj);
     }
 
-    ninjadb.prototype = new events.EventEmitter;
+    //ninjadb.prototype = new events.EventEmitter;
+
+//start indexing related functions.
+
+
+    //used to normalize text before storing in index.
+    ninjadb.prototype.normalize_glyphs = function(str){
+        //phonetic substitions, throw away accents, synonyms, do not index glyphs
+        //current substition strips all white space.
+        return str.replace(/\s/ig, '');
+    }
+
+    ninjadb.prototype.tokenize_glyphs = function(str){
+        var tokens = str.split('');
+        return tokens;
+    }
+
+    ninjadb.prototype.test_depth = function(obj, attr){
+        if(obj[attr]){
+            return obj[attr];
+        }else{
+            obj[attr] = {};
+            return obj[attr];
+        }
+    }
+
+    //pass in the document id and the string to index.
+    ninjadb.prototype.add_to_index = function(id, field, str){
+        var self=this;
+        var str;
+        var tokens;
+        str = self.normalize_glyphs(str);
+        tokens = self.tokenize_glyphs(str);
+        for(var i=0; i<str.length; i++){
+            var obj = self.index_cache;
+            for(var j=0; j<self.index_depth; j++){
+                var pos = i+j;                
+                if((tokens.length) > pos){
+                    obj = self.test_depth(obj, tokens[pos]);
+                    obj.here = [{ "id":id, "field":field, "pos":(i+j)}];
+                }else{
+                    break;
+                }
+            }
+        }
+        //test output from indexing.
+        console.log(JSON.stringify(self.index_cache, null, 2));
+    }
+
+    ninjadb.prototype.load_index = function(){
+
+    }
+
+    ninjadb.prototype.find_exact = function(){
+
+    }
+
+    ninjadb.prototype.find_wild = function(){
+
+    }
+
+    ninjadb.prototype.init_index = function(){
+        var self=this;
+        self.index_depth = 25;
+        self.index_cache = {}; //load main cache.
+        console.log('init index called');
+        self.add_to_index('thisid', 'id', 'this is a sentence that should be encoded into the index for searching quickly.');
+    }
+//end indexing related functions.
 
     ninjadb.prototype.emit_to_cpus = function(obj)
     {
@@ -445,6 +513,8 @@ if (cluster.isMaster) {
             self.init_count++;
             self.init_complete();
             self.init_access_list();
+
+            self.init_index(); //testing.
         });
     }
 
@@ -636,6 +706,7 @@ if (cluster.isMaster) {
 
     ninjadb.prototype.init = function() {
         var self = this;
+        self.index_depth = 50; //50 glyphs max depth for index.
         self.init_count=0;
 
         self.init_node_list();
@@ -685,8 +756,6 @@ if (cluster.isMaster) {
         //writefs_struct_cache_sync(nj.arg_obj.root + '/' + nj.arg_obj.node + '/' + struct_cache_file + '~dump', JSON.stringify(nj.struct_cache));
         process.exit();
     }
-
-    ninjadb.prototype.
 
     ninjadb.prototype.test = function(){
 
