@@ -20,8 +20,8 @@ build function for handling where to store file etc. it is this function then th
 //var fs = require('fs');
 //https://github.com/isaacs/node-graceful-fs
 
-var cluster = require('cluster')
-
+var cluster = require('cluster');
+var iconv = require('iconv'); //for UTF-32 bit support.
 process.stdin.resume(); //stop program closing instantly;
 
 var merge_jsonstr = function(s1, s2){
@@ -127,10 +127,36 @@ if (cluster.isMaster) {
                 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
                 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
 
+ /*
+   [{"0":"00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+        "1":"FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF",
+        "2":"path",
+        "3":"filename",
+        "4":"byte_offset",
+        "5":"byte_size"}
+   ]
+
+function getBinarySize(string) {
+    return Buffer.byteLength(string, 'utf8');
+}
+
+ */
+    
+
+    var index_field_map = {"range_min":0,
+                           "range_max":1,
+                           "file_path":2,
+                           "file_name":3,
+                           "byte_offset":4,
+                           "byte_size":5
+                          }
+
     var struct_cache_file = 'struct.cache';
     var table_list_file   = 'table.list';
     var node_list_file    = 'node.list';
     var access_list_file  = 'access.list';
+    var index_list_file   = "index.list";
+    var index_rec_size    = 1024; //in bytes
     
     var load_time_slot_size = 2000; //time slot in milliseconds.
     var deltat;
@@ -311,11 +337,263 @@ if (cluster.isMaster) {
         console.log(self.arg_obj);
     }
 
-    //ninjadb.prototype = new events.EventEmitter;
+    ninjadb.prototype = new events.EventEmitter;
+
+    //field name:byte_length
+    var index_schema =  {
+                            range_min:24,
+                            range_max:24,
+                            path:255,
+                            filename:255,
+                            byte_offset:8,
+                            byte_size:8
+                        }
+
+    var index = function(idx_schema){
+        var self = this;
+        var schema  = idx_schema;
+
+        self.sort_schema();
+    }
+
+    //return the size of a single index entry.
+    index.prototype.sizeof = function()
+    {
+        var self    = this;
+        var size    = 0;
+
+        for(var i in self.schema) 
+        {
+            if(self.schema.hasOwnProperty(i))
+            {
+                size += self.schema[i];                
+            }
+        }
+
+        return size;
+    }
+
+    index.prototype.sort_schema = function()
+    {
+        var self = this;
+        self.sorted_schema = [];
+
+        for(var i in self.schema) 
+        {
+            if(self.schema.hasOwnProperty(i))
+            {
+                self.sorted_schema.push(i);
+            }
+        }
+
+        self.sorted_schema.sort();
+    }
+
+    //obj should match the schema.
+    //return a buffer object of the schema with values for writing to a file of fixed length.
+    index.prototype.to_buffer = function(obj)
+    {
+        var self=this;
+        /*
+        {
+            "0":"00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"   //24bytes, in ascii x2 = 48bytes + 23
+            "1":"FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF",  //24bytes, in ascii x2 = 48bytes + 23
+            "2":"path in hex byte code",        //how many bytes? //255bytes
+            "3":"filename in hex byte code",    //how many bytes? //255bytes
+            "4":"byte_offset in hex byte code", //how many bytes? //64bit float (8bytes) "00 00 00 00 00 00 00 00" so takes 16 ascii bytes. + 7bytes if we keep the space formatting
+            "5":"byte_size in hex bytecode"     //how many bytes? //64bit float (8bytes) "00 00 00 00 00 00 00 00"
+        }
+        */
+
+        var buf1    = null;
+        var tmp_buf = null;
+
+        for(var i = 0; i<self.sorted_schema;i++)
+        {
+            //good build the buffer.
+            var buff_size = 0; 
+
+            if(buf1)
+            {
+                buff_size = buf1.byteLength();
+            }
+            buf2 = Buffer.from((obj[self.sorted_schema[i]]), 'ucs2');               
+            tmp_buf = Buffer.alloc(buff_size + self.schema[self.sorted_schema[i]]);
+            if(buff_size > 0)
+            {
+                //copy the existing data into the new enlarged tmp_buf
+                buf1.copy(tmp_buf, 0, 0, buff_size);
+            }
+            //copy from buf2 into tmp_buff (truncation may occur)
+            buf2.copy(tmp_buf, buff_size+1, 0, buff_size + 1 + self.schema[self.sorted_schema[i]]);
+            //enlarge buf1 by reallocating larger.
+            buf1 = Buffer.alloc(buff_size + self.schema[self.sorted_schema[i]]);
+            //copy from the tmp buffer to the new buffer
+            tmp_buf.copy(buf1, 0, 0, buff_size + self.schema[self.sorted_schema[i]]);
+        }
+
+        return buf1;
+    }
+
+    //return the object from a buffer
+    index.prototype.from_buffer = function(buff)
+    {
+        var obj = {};
+        var byte_pos = 0;
+        for(var i = 0; i<self.sorted_schema;i++)
+        {
+            obj[self.sorted_schema[i]] = buff.toString('ucs2', byte_pos, byte_pos + self.schema[self.sorted_schema[i]]);
+            byte_pos += self.schema[self.sorted_schema[i]] + 1;
+        }
+
+        return obj;
+    }
+
+
+    //start indexing related functions.
+    //used to normalize text before storing in index.
+    ninjadb.prototype.normalize_glyphs = function(str){
+        //phonetic substitions, throw away accents, synonyms, do not index glyphs
+        //current substition strips all white space.
+        str = str.toLowerCase();
+        return str.replace(/\s/ig, '');
+    }
+
+    //makes sure the buffer does not exceed the window_size_bytes length.
+    ninjadb.prototype.fixbuff = function(buff){
+        var self=this;
+        var b = Buffer.alloc(self.window_size_bytes);
+        var buff_len = buff.length;
+
+        if(buff_len > self.window_size_bytes){
+            for(var i=0; i<b.length; i++){
+                b[i] = buff[i];
+            }
+        }else{
+            for(var i=1; i<b.length+1; i++){
+                if(buff_len-i > 0){
+                    b[self.window_size_bytes-i] = buff[buff_len-i];
+                }else{
+                    break;
+                }
+            }
+        }
+
+        return b;
+    }
+
+    //buff lengths need to be equal.
+    ninjadb.prototype.compare = function(buff1, buff2){
+        var self=this;
+
+        //a-b
+        // buff needs to be padded left to the size of the window.
+        // 00 00 00 23 42 32 buff 1 
+        // 00 00 00 12 00 00 buff 2
+        //
+        for(var i=0; i<buff1.length; i++){
+            if(buff1[i]<buff2[i]){
+                return -1;
+            }else if(buff[i]>buff2[i]){
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
+    //field_id needs to be an integer for fixed length with another field.list file being able to translate the number to a real name.
+    ninjadb.prototype._bin_search = function(id, field_id, buff){
+        //window_size (number of bytes) + size of (id data) must be fixed this is the byte position in file to read.
+        /*
+        for(var i=0; i<str.length; i++){
+            var obj = self.index_cache;
+            for(var j=0; j<self.window_size_bytes; j++){
+                var pos = i+j;                
+                if(str.length > pos){
+                    key = str.substring(i, pos);
+                    obj.append({"0":key,"1":id,"2":field,"3":pos});
+                }else{
+                    key = str.substring(i);
+                    obj.append({"0":key,"1":id,"2":field,"3":pos});
+                }
+            }
+        }
+        //test output from indexing.
+        console.log(JSON.stringify(self.index_cache, null, 2));
+        */
+    }
+
+    ninjadb.prototype._add_to_index = function(id, field_id, buff){
+        var self=this;
+        var str;
+        var key;
+
+        //find the index file to use:
+        //maybe update this to a binary search also later.
+        for(var i=0; i<self.index_list.length; i++){
+            if(self.compare(self.index_list[i].range_min, buff) < 0 && self.compare(self.index_list[i].range_max, buff) > 0){
+                //this file is between range, open this file for searching.
+                
+            }
+        }
+    }
+    
+    //pass in the document id and the string to index.
+    ninjadb.prototype.add_to_index = function(id, field_id, str){
+        self = this;
+        str = self.normalize_glyphs(str);
+        self._add_to_index(id, field_id, self.fixbuff(Buffer.from(str,'utf8')));
+    }
+
+    ninjadb.prototype.find_exact = function(){
+
+    }
+
+    ninjadb.prototype.find_wild = function(){
+
+    }
+
+    ninjadb.prototype.init_index = function(){
+        var self=this;
+        self.window_size_bytes = 24;  //number of bytes to store.
+        
+        //load index.list
+        console.log('root' + self.arg_obj.root);
+        console.log('index.list:' + index_list_file);
+        console.log('reading stream:' + self.arg_obj.root + '/' + index_list_file);
+        var rs = fs.createReadStream(self.arg_obj.root + '/' + index_list_file);
+        var data = [];
+
+        rs.setEncoding('utf8');
+
+        rs.on('error', function(e){
+            console.log('error reading index');
+            self.node_list = {};
+        });
+
+        rs.on('data', function(chunk) {
+            data.push(chunk);
+        });
+
+        rs.on('end', function() {
+            self.index_list = JSON.parse(data.join());
+            console.log(self.index_list);
+
+            for(var i=0; i<self.index_list.length;i++){       
+                self.index_list[i].range_min = Buffer.from(self.index_list[i].range_min.replace(/\s/gi, ''), 'hex');
+                self.index_list[i].range_max = Buffer.from(self.index_list[i].range_max.replace(/\s/gi, ''), 'hex');
+            }
+
+            console.log(self.index_list);
+            self.add_to_index('thisid', 'id', 'this is a sentence that should be encoded into the index for searching quickly.');
+        });       
+    }
+//end indexing related functions.
+
 
 //start indexing related functions.
-
-
+/*    
     //used to normalize text before storing in index.
     ninjadb.prototype.normalize_glyphs = function(str){
         //phonetic substitions, throw away accents, synonyms, do not index glyphs
@@ -337,19 +615,20 @@ if (cluster.isMaster) {
         }
     }
 
+
     //pass in the document id and the string to index.
     ninjadb.prototype.add_to_index = function(id, field, str){
         var self=this;
         var str;
         var tokens;
-        str = self.normalize_glyphs(str);
-        tokens = self.tokenize_glyphs(str);
+        str = self.tree.normalize_glyphs(str);
+        tokens = self.tree.tokenize_glyphs(str);
         for(var i=0; i<str.length; i++){
-            var obj = self.index_cache;
-            for(var j=0; j<self.index_depth; j++){
+            var obj = self.tree.index_cache;
+            for(var j=0; j<self.tree.index_depth; j++){
                 var pos = i+j;                
                 if((tokens.length) > pos){
-                    obj = self.test_depth(obj, tokens[pos]);
+                    obj = self.tree.test_depth(obj, tokens[pos]);
                     obj.here = [{ "id":id, "field":field, "pos":(i+j)}];
                 }else{
                     break;
@@ -357,28 +636,29 @@ if (cluster.isMaster) {
             }
         }
         //test output from indexing.
-        console.log(JSON.stringify(self.index_cache, null, 2));
+        console.log(JSON.stringify(self.tree.index_cache, null, 2));
     }
 
-    ninjadb.prototype.load_index = function(){
-
-    }
-
-    ninjadb.prototype.find_exact = function(){
+    ninjadb.prototype.tree.load_index = function(){
 
     }
 
-    ninjadb.prototype.find_wild = function(){
+    ninjadb.prototype.tree.find_exact = function(){
 
     }
 
-    ninjadb.prototype.init_index = function(){
+    ninjadb.prototype.tree.find_wild = function(){
+
+    }
+
+    ninjadb.prototype.tree.init_index = function(){
         var self=this;
-        self.index_depth = 25;
-        self.index_cache = {}; //load main cache.
+        self.tree.index_depth = 25;
+        self.tree.index_cache = {}; //load main cache.
         console.log('init index called');
-        self.add_to_index('thisid', 'id', 'this is a sentence that should be encoded into the index for searching quickly.');
+        self.tree.add_to_index('thisid', 'id', 'this is a sentence that should be encoded into the index for searching quickly.');
     }
+    */
 //end indexing related functions.
 
     ninjadb.prototype.emit_to_cpus = function(obj)
@@ -762,6 +1042,7 @@ if (cluster.isMaster) {
     }
 
     ninja = new ninjadb();
+    idx = new index(index_schema);
 
     //do something when app is closing
     process.on('exit', ninja.exitHandler.bind(null,{exit:true}));

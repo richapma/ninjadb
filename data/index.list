@@ -1,4 +1,10 @@
-{
-    "1":"filename1",
-    "2":"filename2"
-}
+[
+ {
+        "0":"00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+        "1":"FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF",
+        "2":"path",
+        "3":"filename",
+        "4":"byte_offset",
+        "5":"byte_size"
+ }
+]
